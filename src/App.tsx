@@ -243,19 +243,6 @@ function App() {
       })
       .slice(0, 12);
   }, [products]);
-  const topBrands = useMemo(() => {
-    const counts = new Map<string, number>();
-    products.forEach((product) => {
-      const brand = productBrandLabel(product.brand, '');
-      if (!brand) return;
-      counts.set(brand, (counts.get(brand) || 0) + 1);
-    });
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([name, count]) => ({ name, count }));
-  }, [products]);
-
   const subcategoryOptions = useMemo(() => {
     if (category === 'All') return ['All'];
     const options = new Set(
@@ -266,22 +253,50 @@ function App() {
     return ['All', ...Array.from(options).sort((a, b) => a.localeCompare(b))];
   }, [catalogProducts, category]);
 
+  const searchQuery = useMemo(() => search.trim().toLowerCase(), [search]);
+
+  const searchFilteredCatalogProducts = useMemo(() => {
+    if (searchQuery.length === 0) return catalogProducts;
+    return catalogProducts.filter((item) => {
+      const searchable = [
+        item.product.name,
+        item.product.description,
+        item.product.short_description || '',
+        productBrandLabel(item.product.brand, ''),
+        item.department,
+        item.collection,
+      ]
+        .join(' ')
+        .toLowerCase();
+      return searchable.includes(searchQuery);
+    });
+  }, [catalogProducts, searchQuery]);
+
+  const visibleDepartmentCards = useMemo(() => {
+    return Array.from(new Set(searchFilteredCatalogProducts.map((item) => item.department)))
+      .sort((a, b) => a.localeCompare(b));
+  }, [searchFilteredCatalogProducts]);
+
+  const visibleCollectionCards = useMemo(() => {
+    if (category === 'All') return [] as string[];
+    return Array.from(
+      new Set(
+        searchFilteredCatalogProducts
+          .filter((item) => item.department === category)
+          .map((item) => item.collection),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+  }, [searchFilteredCatalogProducts, category]);
+
   const filteredProducts = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return catalogProducts
+    return searchFilteredCatalogProducts
       .filter((item) => {
         const matchDepartment = category === 'All' || item.department === category;
         const matchCollection = subcategory === 'All' || item.collection === subcategory;
-        const matchSearch =
-          query.length === 0 ||
-          item.product.name.toLowerCase().includes(query) ||
-          item.product.description.toLowerCase().includes(query) ||
-          item.department.toLowerCase().includes(query) ||
-          item.collection.toLowerCase().includes(query);
-        return matchDepartment && matchCollection && matchSearch;
+        return matchDepartment && matchCollection;
       })
       .map((item) => item.product);
-  }, [catalogProducts, category, subcategory, search]);
+  }, [searchFilteredCatalogProducts, category, subcategory]);
 
   const cartProducts = useMemo(() => {
     return Object.entries(cart)
@@ -1654,38 +1669,6 @@ function App() {
             </motion.section>
           ) : null}
 
-          <section className="storefront-spotlight">
-            <article className="spotlight-card spotlight-hero">
-              <p className="label">Today Spotlight</p>
-              <h3>Fresh arrivals with same-day delivery</h3>
-              <p className="muted">Discover curated picks powered by your catalog import and live inventory.</p>
-              <button
-                type="button"
-                className="primary"
-                onClick={() => {
-                  setStorefrontScreen('products');
-                  productsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }}
-              >
-                Shop Now
-              </button>
-            </article>
-            <article className="spotlight-card">
-              <p className="label">Top Brands</p>
-              {topBrands.length > 0 ? (
-                <div className="brand-chip-row">
-                  {topBrands.slice(0, 5).map((brand) => (
-                    <span key={brand.name} className="brand-chip">
-                      {brand.name} ({brand.count})
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">Brands will appear once mapped in catalog details.</p>
-              )}
-            </article>
-          </section>
-
           {featuredDeals.length > 0 ? (
             <section className="panel mini-top">
               <div className="row between">
@@ -1705,7 +1688,7 @@ function App() {
                         <p className="muted small">{productBrandLabel(product.brand, productCategoryLabel(product.category))}</p>
                         <div className="row between">
                           <strong className="product-price">{money(product.price)}</strong>
-                          <span className="status green">{offerPercent}% OFF</span>
+                          <span className="status offer">{offerPercent}% OFF</span>
                         </div>
                       </div>
                     </article>
@@ -1725,7 +1708,7 @@ function App() {
                 {popularPicks.slice(0, 6).map((product) => (
                   <article key={`pick-${product.id}`} className="pick-card clickable-card" onClick={() => setSelectedProductDetail(product)}>
                     <div className="pick-head">
-                      <span className="status blue">★ {product.rating.toFixed(1)}</span>
+                      <span className="status review-star">★ {product.rating.toFixed(1)}</span>
                       {product.stock_status ? <span className="muted small">{formatStatusText(product.stock_status)}</span> : null}
                     </div>
                     <h4>{productDisplayName(product.name)}</h4>
@@ -1776,7 +1759,6 @@ function App() {
                   type="button"
                   className={`ghost ${storefrontScreen === 'products' ? 'chip-active' : ''}`}
                   onClick={() => setStorefrontScreen('products')}
-                  disabled={category === 'All'}
                 >
                   Products
                 </button>
@@ -1828,34 +1810,31 @@ function App() {
 
             {storefrontScreen === 'departments' ? (
               <section className="trust-grid mini-top">
-                {categories
-                  .filter((item) => item !== 'All')
-                  .map((item) => {
-                    const itemCount = catalogProducts.filter((entry) => entry.department === item).length;
-                    return (
-                      <article className="trust-card clickable-card" key={`dept-${item}`} onClick={() => chooseDepartment(item)}>
-                        <h4>{item}</h4>
-                        <p className="muted">{itemCount} products</p>
-                      </article>
-                    );
-                  })}
+                {visibleDepartmentCards.map((item) => {
+                  const itemCount = searchFilteredCatalogProducts.filter((entry) => entry.department === item).length;
+                  return (
+                    <article className="trust-card clickable-card" key={`dept-${item}`} onClick={() => chooseDepartment(item)}>
+                      <h4>{item}</h4>
+                      <p className="muted">{itemCount} products</p>
+                    </article>
+                  );
+                })}
+                {visibleDepartmentCards.length === 0 ? <div className="state-card">No departments found for this search.</div> : null}
               </section>
             ) : null}
 
             {storefrontScreen === 'collections' ? (
               <section className="trust-grid mini-top">
-                {subcategoryOptions
-                  .filter((item) => item !== 'All')
-                  .map((item) => {
-                    const itemCount = catalogProducts.filter((entry) => entry.department === category && entry.collection === item).length;
-                    return (
-                      <article className="trust-card clickable-card" key={`collection-${item}`} onClick={() => chooseCollection(item)}>
-                        <h4>{item}</h4>
-                        <p className="muted">{itemCount} products in {category}</p>
-                      </article>
-                    );
-                  })}
-                {subcategoryOptions.length <= 1 ? <div className="state-card">No collections found for this department.</div> : null}
+                {visibleCollectionCards.map((item) => {
+                  const itemCount = searchFilteredCatalogProducts.filter((entry) => entry.department === category && entry.collection === item).length;
+                  return (
+                    <article className="trust-card clickable-card" key={`collection-${item}`} onClick={() => chooseCollection(item)}>
+                      <h4>{item}</h4>
+                      <p className="muted">{itemCount} products in {category}</p>
+                    </article>
+                  );
+                })}
+                {visibleCollectionCards.length === 0 ? <div className="state-card">No collections found for this department.</div> : null}
               </section>
             ) : null}
 
@@ -1882,7 +1861,7 @@ function App() {
                         <h3 className="product-title">{productDisplayName(product.name)}</h3>
                         <div className="row">
                           {product.compare_at_price > product.price ? (
-                            <span className="status green">
+                            <span className="status offer">
                               {Math.max(1, Math.round(((product.compare_at_price - product.price) / product.compare_at_price) * 100))}% OFF
                             </span>
                           ) : null}
@@ -2947,10 +2926,25 @@ function App() {
 
       <AnimatePresence>
         {selectedProductDetail ? (
-          <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <motion.div className="dialog dialog-fullscreen" initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 12, opacity: 0 }}>
-              <div className="row between">
-                <h3>{productDisplayName(selectedProductDetail.name)}</h3>
+          <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedProductDetail(null)}>
+            <motion.div
+              className="dialog dialog-fullscreen product-detail-dialog"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 12, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="product-detail-header">
+                <div className="product-detail-title-wrap">
+                  <p className="label">Product Details</p>
+                  <h3>{productDisplayName(selectedProductDetail.name)}</h3>
+                  <p className="muted small product-detail-subtitle">
+                    {productBrandLabel(selectedProductDetail.brand, 'Generic')}
+                    {' • '}
+                    {productCategoryLabel(selectedProductDetail.category)}
+                    {productSubcategoryLabel(selectedProductDetail.subcategory, '') ? ` / ${productSubcategoryLabel(selectedProductDetail.subcategory, '')}` : ''}
+                  </p>
+                </div>
                 <button type="button" className="ghost close-icon-btn" aria-label="Close product details" onClick={() => setSelectedProductDetail(null)}>
                   <AppIcon name="x" />
                 </button>
@@ -2963,49 +2957,47 @@ function App() {
                     <span>{productCategoryLabel(selectedProductDetail.category)}</span>
                   )}
                 </div>
-                <div className="stack">
-                  <p className="muted">
+                <div className="stack product-detail-info">
+                  <div className="product-detail-badges">
+                    {selectedProductDetail.compare_at_price > selectedProductDetail.price ? (
+                      <span className="status offer">
+                        {Math.max(1, Math.round(((selectedProductDetail.compare_at_price - selectedProductDetail.price) / selectedProductDetail.compare_at_price) * 100))}% OFF
+                      </span>
+                    ) : null}
+                    <span className="status review-star">★ {selectedProductDetail.rating.toFixed(1)}</span>
+                    <span className={statusClass(selectedProductDetail.inventory > 0 ? 'available' : 'sold')}>
+                      {selectedProductDetail.inventory > 0 ? 'In Stock' : 'Out Of Stock'}
+                    </span>
+                  </div>
+                  <p className="muted product-detail-description">
                     {selectedProductDetail.short_description?.trim() || selectedProductDetail.description}
                   </p>
-                  <div className="tile">
-                    <span>Brand</span>
-                    <strong>{productBrandLabel(selectedProductDetail.brand, 'Generic')}</strong>
-                  </div>
-                  <div className="tile">
-                    <span>Category</span>
-                    <strong>
-                      {productCategoryLabel(selectedProductDetail.category)}
-                      {productSubcategoryLabel(selectedProductDetail.subcategory, '') ? ` / ${productSubcategoryLabel(selectedProductDetail.subcategory, '')}` : ''}
-                    </strong>
-                  </div>
-                  <div className="tile">
-                    <span>Unit</span>
-                    <strong>{selectedProductDetail.unit_value} {selectedProductDetail.unit}</strong>
-                  </div>
-                  <div className="tile">
-                    <span>Stock</span>
-                    <strong>{selectedProductDetail.inventory}</strong>
-                  </div>
-                  {selectedProductDetail.tax_percent != null ? (
-                    <div className="tile">
+                  <div className="product-detail-facts">
+                    <article className="product-detail-fact">
+                      <span>Brand</span>
+                      <strong>{productBrandLabel(selectedProductDetail.brand, 'Generic')}</strong>
+                    </article>
+                    <article className="product-detail-fact">
+                      <span>Unit Size</span>
+                      <strong>{selectedProductDetail.unit_value} {selectedProductDetail.unit}</strong>
+                    </article>
+                    <article className="product-detail-fact">
+                      <span>Available Qty</span>
+                      <strong>{selectedProductDetail.inventory}</strong>
+                    </article>
+                    <article className="product-detail-fact">
                       <span>Tax</span>
-                      <strong>
-                        GST {selectedProductDetail.tax_percent}%
-                      </strong>
-                    </div>
-                  ) : null}
-                  <div className="tile">
-                    <span>Rating</span>
-                    <strong>{selectedProductDetail.rating}</strong>
+                      <strong>{selectedProductDetail.tax_percent != null ? `GST ${selectedProductDetail.tax_percent}%` : 'Included'}</strong>
+                    </article>
                   </div>
-                  <div className="row between">
-                    <div>
+                  <div className="product-detail-price">
+                    <div className="product-detail-price-block">
                       <strong className="product-price">{money(selectedProductDetail.price)}</strong>
-                      <small className="line">{money(selectedProductDetail.compare_at_price)}</small>
                       {selectedProductDetail.compare_at_price > selectedProductDetail.price ? (
-                        <p className="muted small">
-                          Save {money(selectedProductDetail.compare_at_price - selectedProductDetail.price)}
-                        </p>
+                        <>
+                          <small className="line">{money(selectedProductDetail.compare_at_price)}</small>
+                          <p className="muted small">Save {money(selectedProductDetail.compare_at_price - selectedProductDetail.price)}</p>
+                        </>
                       ) : null}
                     </div>
                     <button
