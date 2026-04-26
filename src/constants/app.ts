@@ -11,6 +11,8 @@ export type AppPage =
 export const STORAGE_SESSION = 'react_shop_session';
 export const STORAGE_CART = 'react_shop_cart';
 export const STORAGE_UI_SETTINGS = 'react_shop_ui_settings';
+export const STORAGE_SHOP_CACHE = 'react_shop_catalog_shop_cache';
+export const STORAGE_PRODUCTS_CACHE = 'react_shop_catalog_products_cache';
 
 export const UNIT_OPTIONS = ['kg', 'g', 'mg', 'ltr', 'ml', 'pcs', 'dozen', 'pack', 'box'];
 export const ORDER_STATUSES = ['pending', 'confirmed', 'packed', 'out_for_delivery', 'cancelled'];

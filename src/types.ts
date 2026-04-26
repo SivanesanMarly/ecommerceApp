@@ -49,6 +49,7 @@ export interface Session {
   full_name: string;
   email: string;
   phone: string;
+  password_setup_required?: boolean;
 }
 
 export interface OrderHistoryItem {
@@ -60,6 +61,7 @@ export interface OrderHistoryItem {
   created_at: string;
   customer_name?: string;
   customer_phone?: string;
+  customer_address?: string;
 }
 
 export interface OrderItem {
@@ -84,6 +86,7 @@ export interface OrderDetail {
   status_timeline: StatusEvent[];
   customer_name?: string;
   customer_phone?: string;
+  customer_address?: string;
 }
 
 export interface Supplier {

@@ -45,6 +45,21 @@ export const api = {
     return data;
   },
 
+  async continueWithGoogle(idToken: string) {
+    const token = idToken.trim();
+    if (!token) {
+      throw new Error('Google credential is missing. Please try again.');
+    }
+    const { data } = await http.post<Session>('/api/auth/google/login', { id_token: token });
+    return data;
+  },
+
+  async logout(token: string) {
+    await http.post('/api/auth/logout', {}, {
+      headers: authHeader(token),
+    });
+  },
+
   async adminLogin(payload: {
     email: string;
     phone: string;
@@ -64,6 +79,43 @@ export const api = {
     password: string;
   }) {
     await http.post('/api/auth/register/user', payload);
+  },
+
+  async forgotPassword(email: string) {
+    const { data } = await http.post<{ message: string }>('/api/auth/forgot-password', { email });
+    return data;
+  },
+
+  async verifyResetOtp(email: string, otp: string) {
+    const { data } = await http.post<{ message: string }>('/api/auth/verify-reset-otp', {
+      email,
+      otp,
+    });
+    return data;
+  },
+
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    const { data } = await http.post<{ message: string }>('/api/auth/reset-password', {
+      email,
+      otp,
+      new_password: newPassword,
+    });
+    return data;
+  },
+
+  async setPassword(
+    token: string,
+    payload: { newPassword: string; currentPassword?: string },
+  ) {
+    const { data } = await http.post<{ message: string }>(
+      '/api/auth/set-password',
+      {
+        new_password: payload.newPassword,
+        current_password: payload.currentPassword,
+      },
+      { headers: authHeader(token) },
+    );
+    return data;
   },
 
   async checkout(token: string, cart: Record<string, number>) {
@@ -442,6 +494,9 @@ export function getApiError(error: unknown) {
     const detail = error.response?.data?.detail;
     if (typeof detail === 'string' && detail.trim()) return detail;
     if (Array.isArray(detail) && detail[0]?.msg) return String(detail[0].msg);
+    return error.message;
+  }
+  if (error instanceof Error && error.message.trim()) {
     return error.message;
   }
   return 'Something went wrong';

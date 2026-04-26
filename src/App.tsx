@@ -1499,8 +1499,6 @@ function App() {
         </div>
       </motion.header>
 
-      {loading ? <div className="state-card">Loading storefront...</div> : null}
-      {error ? <div className="state-card error">{error}</div> : null}
 
       {showStorefrontContent ? (
         <>

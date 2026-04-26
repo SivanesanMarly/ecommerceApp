@@ -221,3 +221,14 @@ export function productSubcategoryLabel(value?: string | null, fallback = 'Featu
 export function productBrandLabel(value?: string | null, fallback = '') {
   return normalizeCatalogLabel(value) || fallback;
 }
+
+export function formatProductUnit(unitValue?: number | null, unit?: string | null) {
+  const numericValue = Number(unitValue);
+  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : 1;
+  const normalizedUnit = normalizeCatalogLabel(unit) || 'unit';
+  const displayUnit = normalizedUnit.toLowerCase() === 'pcs' && safeValue === 1 ? 'pc' : normalizedUnit;
+  const formattedValue = Number.isInteger(safeValue)
+    ? String(safeValue)
+    : safeValue.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  return `${formattedValue} ${displayUnit}`;
+}

@@ -75,7 +75,7 @@ export function AdminOrdersPage({
           </div>
           <div className="admin-products-filters mini-top">
             <input
-              placeholder="Search by order id, status, or item"
+              placeholder="Search by order id, status, item, or address"
               value={adminOrdersSearch}
               onChange={(e) => setAdminOrdersSearch(e.target.value)}
             />
@@ -123,6 +123,9 @@ export function AdminOrdersPage({
                     </div>
                   </div>
                   <p className="muted small">Placed {formatTime(order.created_at)}</p>
+                  <p className="muted small">
+                    Address: {order.customer_address?.trim() ? order.customer_address : 'Not available'}
+                  </p>
                   <p className="muted admin-product-sub">{order.items.join(', ')}</p>
                   <div className="row between">
                     <strong>{money(order.total_amount)}</strong>
