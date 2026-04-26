@@ -2,7 +2,6 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import './index.css';
 import { api, getApiError } from './api';
-import brandLogo from './assets/urbancart-logo.svg';
 import { AppIcon } from './components/common/AppIcon';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage';
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage';
@@ -65,6 +64,7 @@ import {
 } from './utils/presentation';
 
 type Cart = Record<string, number>;
+const brandLogo = '/app_logo.jpeg';
 
 function App() {
   const [shop, setShop] = useState<Shop | null>(null);
@@ -1855,14 +1855,18 @@ function App() {
                       )}
                     </div>
                     <div className="product-body">
-                      <div className="row between">
+                      <div className="product-card-head">
                         <h3 className="product-title">{productDisplayName(product.name)}</h3>
-                        <div className="row">
+                        <div className="product-card-statuses">
                           {product.compare_at_price > product.price ? (
-                            <span className="status offer">
+                            <span className="status offer product-card-offer-status">
                               {Math.max(1, Math.round(((product.compare_at_price - product.price) / product.compare_at_price) * 100))}% OFF
                             </span>
-                          ) : null}
+                          ) : (
+                            <span className="status offer product-card-offer-status status-placeholder" aria-hidden="true">
+                              00% OFF
+                            </span>
+                          )}
                           <span className={statusClass(product.inventory > 0 ? 'available' : 'sold')}>{product.inventory > 0 ? 'In stock' : 'Out'}</span>
                         </div>
                       </div>

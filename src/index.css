@@ -723,6 +723,31 @@ button:disabled {
   max-width: 170px;
 }
 
+.product-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.product-card-statuses {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.product-card-offer-status {
+  min-width: 70px;
+  text-align: center;
+}
+
+.status-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .product-description {
   line-height: 1.45;
   color: #3f5f77;
