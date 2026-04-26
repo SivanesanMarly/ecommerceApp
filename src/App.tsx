@@ -69,8 +69,8 @@ const brandLogo = '/app_logo.jpeg';
 function App() {
   const [shop, setShop] = useState<Shop | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [, setLoading] = useState(true);
+  const [, setError] = useState('');
 
   const [session, setSession] = useState<Session | null>(null);
   const [cart, setCart] = useState<Cart>({});
