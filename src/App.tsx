@@ -107,8 +107,10 @@ function App() {
   });
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
+  const [googleAuthBusy, setGoogleAuthBusy] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const googleSignInMountRef = useRef<HTMLDivElement | null>(null);
 
   const [history, setHistory] = useState<OrderHistoryItem[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<OrderDetail | null>(null);
@@ -855,6 +857,114 @@ function App() {
       setAuthBusy(false);
     }
   }
+
+  async function ensureGoogleIdentityScriptLoaded() {
+    const win = window as Window & {
+      google?: {
+        accounts?: {
+          id?: {
+            initialize: (options: Record<string, unknown>) => void;
+            renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
+          };
+        };
+      };
+      __googleIdentityScriptPromise?: Promise<void>;
+    };
+
+    if (win.google?.accounts?.id) return;
+    if (win.__googleIdentityScriptPromise) {
+      await win.__googleIdentityScriptPromise;
+      return;
+    }
+
+    win.__googleIdentityScriptPromise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Google Sign-In SDK.'));
+      document.head.appendChild(script);
+    });
+
+    await win.__googleIdentityScriptPromise;
+  }
+
+  useEffect(() => {
+    if (!authOpen || authMode !== 'login') return;
+
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
+    if (!clientId) return;
+
+    let cancelled = false;
+
+    async function setupGoogleButton() {
+      try {
+        await ensureGoogleIdentityScriptLoaded();
+        if (cancelled) return;
+
+        const win = window as Window & {
+          google?: {
+            accounts?: {
+              id?: {
+                initialize: (options: Record<string, unknown>) => void;
+                renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
+              };
+            };
+          };
+        };
+
+        const googleId = win.google?.accounts?.id;
+        const mount = googleSignInMountRef.current;
+        if (!googleId || !mount) return;
+
+        googleId.initialize({
+          client_id: clientId,
+          callback: async (response: { credential?: string }) => {
+            const credential = response.credential?.trim();
+            if (!credential) {
+              setAuthError('Google credential is missing. Please try again.');
+              return;
+            }
+            setGoogleAuthBusy(true);
+            setAuthError('');
+            try {
+              const result = await api.continueWithGoogle(credential);
+              setSession(result);
+              setActivePage(result.role === 'supplier' ? 'supplier-products' : 'home');
+              setAuthOpen(false);
+              setLoginIdentifier('');
+              setLoginPassword('');
+              setToast(`Welcome, ${result.full_name || result.role}`);
+            } catch (e) {
+              setAuthError(getApiError(e));
+            } finally {
+              setGoogleAuthBusy(false);
+            }
+          },
+          auto_select: false,
+          use_fedcm_for_prompt: true,
+        });
+
+        mount.innerHTML = '';
+        googleId.renderButton(mount, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          width: 320,
+        });
+      } catch (e) {
+        setAuthError(getApiError(e));
+      }
+    }
+
+    void setupGoogleButton();
+    return () => {
+      cancelled = true;
+    };
+  }, [authOpen, authMode]);
 
   async function handleRegister() {
     setAuthBusy(true);
@@ -3781,6 +3891,16 @@ function App() {
                   <button disabled={authBusy} className="primary" onClick={() => void handleLogin()}>
                     {authBusy ? 'Signing in...' : 'Sign In'}
                   </button>
+                  <div className="auth-divider">
+                    <span>or</span>
+                  </div>
+                  <div className="google-login-wrap">
+                    <div ref={googleSignInMountRef} className="google-signin-mount" />
+                  </div>
+                  {!import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ? (
+                    <p className="muted small">Google sign-in is not configured in this environment.</p>
+                  ) : null}
+                  {googleAuthBusy ? <p className="muted small">Connecting Google...</p> : null}
                 </div>
               ) : (
                 <div className="stack">
