@@ -7,7 +7,6 @@ import { AdminCatalogPage } from './pages/admin/AdminCatalogPage';
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage';
 import { UserOrdersPage } from './pages/user/UserOrdersPage';
 import {
-  ADMIN_PRODUCTS_BATCH_SIZE,
   COUNTRY_CODE_MAX_LENGTH,
   COUNTRY_CODE_REGEX,
   ECOMMERCE_DEFAULT_CATEGORIES,
@@ -65,6 +64,8 @@ import {
 
 type Cart = Record<string, number>;
 const brandLogo = '/app_logo.jpeg';
+const STOREFRONT_PRODUCTS_PER_PAGE = 16;
+const ADMIN_PRODUCTS_PER_PAGE = 24;
 
 function App() {
   const [shop, setShop] = useState<Shop | null>(null);
@@ -78,6 +79,7 @@ function App() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
   const [subcategory, setSubcategory] = useState('All');
+  const [storefrontProductsPage, setStorefrontProductsPage] = useState(1);
   const [storefrontScreen, setStorefrontScreen] = useState<'departments' | 'collections' | 'products'>('departments');
   const [authOpen, setAuthOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
@@ -98,6 +100,7 @@ function App() {
 
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [regForm, setRegForm] = useState({
     username: '',
     email: '',
@@ -106,6 +109,8 @@ function App() {
     password: '',
   });
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false);
+  const [showRegisterConfirmPassword, setShowRegisterConfirmPassword] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [googleAuthBusy, setGoogleAuthBusy] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -142,7 +147,7 @@ function App() {
   const [adminProductsSearch, setAdminProductsSearch] = useState('');
   const [adminProductsCategoryFilter, setAdminProductsCategoryFilter] = useState('All');
   const [adminProductsStockFilter, setAdminProductsStockFilter] = useState<'all' | 'in_stock' | 'low_stock' | 'out_of_stock'>('all');
-  const [adminProductsVisibleCount, setAdminProductsVisibleCount] = useState(ADMIN_PRODUCTS_BATCH_SIZE);
+  const [adminProductsPage, setAdminProductsPage] = useState(1);
   const [adminOrderStatusUpdatingId, setAdminOrderStatusUpdatingId] = useState<string | null>(null);
   const [adminOrdersSearch, setAdminOrdersSearch] = useState('');
   const [adminOrdersStatusFilter, setAdminOrdersStatusFilter] = useState('all');
@@ -161,6 +166,7 @@ function App() {
   const [supplierCreateForm, setSupplierCreateForm] = useState(emptySupplierCreateForm);
   const [showSupplierCreateForm, setShowSupplierCreateForm] = useState(false);
   const [supplierCreateBusy, setSupplierCreateBusy] = useState(false);
+  const [showSupplierCreatePassword, setShowSupplierCreatePassword] = useState(false);
   const [suppliersSearch, setSuppliersSearch] = useState('');
 
   const [supplyCreateForm, setSupplyCreateForm] = useState(emptySupplyCreateForm);
@@ -299,6 +305,40 @@ function App() {
       })
       .map((item) => item.product);
   }, [searchFilteredCatalogProducts, category, subcategory]);
+  const totalStorefrontProductPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredProducts.length / STOREFRONT_PRODUCTS_PER_PAGE));
+  }, [filteredProducts.length]);
+  const paginatedFilteredProducts = useMemo(() => {
+    const startIndex = (storefrontProductsPage - 1) * STOREFRONT_PRODUCTS_PER_PAGE;
+    return filteredProducts.slice(startIndex, startIndex + STOREFRONT_PRODUCTS_PER_PAGE);
+  }, [filteredProducts, storefrontProductsPage]);
+  const storefrontProductsRange = useMemo(() => {
+    if (filteredProducts.length === 0) return { start: 0, end: 0 };
+    const start = (storefrontProductsPage - 1) * STOREFRONT_PRODUCTS_PER_PAGE + 1;
+    const end = Math.min(storefrontProductsPage * STOREFRONT_PRODUCTS_PER_PAGE, filteredProducts.length);
+    return { start, end };
+  }, [filteredProducts.length, storefrontProductsPage]);
+  const storefrontPageNumbers = useMemo(() => {
+    if (totalStorefrontProductPages <= 7) {
+      return Array.from({ length: totalStorefrontProductPages }, (_, idx) => idx + 1);
+    }
+
+    const pages: number[] = [1];
+    const windowStart = Math.max(2, storefrontProductsPage - 1);
+    const windowEnd = Math.min(totalStorefrontProductPages - 1, storefrontProductsPage + 1);
+
+    if (windowStart > 2) {
+      pages.push(-1);
+    }
+    for (let page = windowStart; page <= windowEnd; page += 1) {
+      pages.push(page);
+    }
+    if (windowEnd < totalStorefrontProductPages - 1) {
+      pages.push(-2);
+    }
+    pages.push(totalStorefrontProductPages);
+    return pages;
+  }, [totalStorefrontProductPages, storefrontProductsPage]);
 
   const cartProducts = useMemo(() => {
     return Object.entries(cart)
@@ -432,10 +472,38 @@ function App() {
     adminProductsCategoryFilter,
     adminProductsStockFilter,
   ]);
-  const visibleAdminProducts = useMemo(() => {
-    return filteredAdminProducts.slice(0, adminProductsVisibleCount);
-  }, [filteredAdminProducts, adminProductsVisibleCount]);
-  const hasMoreAdminProducts = visibleAdminProducts.length < filteredAdminProducts.length;
+  const totalAdminProductPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredAdminProducts.length / ADMIN_PRODUCTS_PER_PAGE));
+  }, [filteredAdminProducts.length]);
+  const paginatedAdminProducts = useMemo(() => {
+    const startIndex = (adminProductsPage - 1) * ADMIN_PRODUCTS_PER_PAGE;
+    return filteredAdminProducts.slice(startIndex, startIndex + ADMIN_PRODUCTS_PER_PAGE);
+  }, [filteredAdminProducts, adminProductsPage]);
+  const adminProductsRange = useMemo(() => {
+    if (filteredAdminProducts.length === 0) return { start: 0, end: 0 };
+    const start = (adminProductsPage - 1) * ADMIN_PRODUCTS_PER_PAGE + 1;
+    const end = Math.min(adminProductsPage * ADMIN_PRODUCTS_PER_PAGE, filteredAdminProducts.length);
+    return { start, end };
+  }, [filteredAdminProducts.length, adminProductsPage]);
+  const adminProductsPageNumbers = useMemo(() => {
+    if (totalAdminProductPages <= 7) {
+      return Array.from({ length: totalAdminProductPages }, (_, idx) => idx + 1);
+    }
+    const pages: number[] = [1];
+    const windowStart = Math.max(2, adminProductsPage - 1);
+    const windowEnd = Math.min(totalAdminProductPages - 1, adminProductsPage + 1);
+    if (windowStart > 2) {
+      pages.push(-1);
+    }
+    for (let page = windowStart; page <= windowEnd; page += 1) {
+      pages.push(page);
+    }
+    if (windowEnd < totalAdminProductPages - 1) {
+      pages.push(-2);
+    }
+    pages.push(totalAdminProductPages);
+    return pages;
+  }, [totalAdminProductPages, adminProductsPage]);
   const isAdminProductsSearching = adminProductsSearch !== deferredAdminProductsSearch;
   const productsWithValidNamesCount = useMemo(() => {
     return products.filter((product) => productDisplayName(product.name, '').length > 0).length;
@@ -628,13 +696,25 @@ function App() {
   }, [shop]);
 
   useEffect(() => {
-    setAdminProductsVisibleCount(ADMIN_PRODUCTS_BATCH_SIZE);
+    setAdminProductsPage(1);
   }, [adminProductsSearch, adminProductsCategoryFilter, adminProductsStockFilter, products.length]);
+
+  useEffect(() => {
+    setAdminProductsPage((prev) => Math.min(prev, totalAdminProductPages));
+  }, [totalAdminProductPages]);
 
   useEffect(() => {
     if (subcategoryOptions.includes(subcategory)) return;
     setSubcategory('All');
   }, [subcategoryOptions, subcategory]);
+
+  useEffect(() => {
+    setStorefrontProductsPage(1);
+  }, [searchQuery, category, subcategory]);
+
+  useEffect(() => {
+    setStorefrontProductsPage((prev) => Math.min(prev, totalStorefrontProductPages));
+  }, [totalStorefrontProductPages]);
 
   useEffect(() => {
     if (activePage !== 'home') return;
@@ -1948,7 +2028,48 @@ function App() {
 
             {storefrontScreen === 'products' ? (
               <section ref={productsSectionRef} className="product-grid mini-top">
-                {filteredProducts.map((product, idx) => (
+                {filteredProducts.length > 0 ? (
+                  <div className="catalog-pagination">
+                    <p className="muted small">
+                      Showing {storefrontProductsRange.start}-{storefrontProductsRange.end} of {filteredProducts.length} products
+                    </p>
+                    <div className="catalog-pagination-controls">
+                      <button
+                        type="button"
+                        className="ghost catalog-pagination-arrow"
+                        onClick={() => setStorefrontProductsPage((prev) => Math.max(1, prev - 1))}
+                        disabled={storefrontProductsPage <= 1}
+                      >
+                        Prev
+                      </button>
+                      {storefrontPageNumbers.map((pageNumber, index) =>
+                        pageNumber > 0 ? (
+                          <button
+                            key={`catalog-page-${pageNumber}`}
+                            type="button"
+                            className={`ghost catalog-pagination-number ${storefrontProductsPage === pageNumber ? 'catalog-pagination-number-active' : ''}`}
+                            onClick={() => setStorefrontProductsPage(pageNumber)}
+                          >
+                            {pageNumber}
+                          </button>
+                        ) : (
+                          <span key={`catalog-page-gap-${index}`} className="catalog-pagination-ellipsis" aria-hidden="true">
+                            ...
+                          </span>
+                        ),
+                      )}
+                      <button
+                        type="button"
+                        className="ghost catalog-pagination-arrow"
+                        onClick={() => setStorefrontProductsPage((prev) => Math.min(totalStorefrontProductPages, prev + 1))}
+                        disabled={storefrontProductsPage >= totalStorefrontProductPages}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {paginatedFilteredProducts.map((product, idx) => (
                   <motion.article
                     className="product-card clickable-card"
                     key={product.id}
@@ -2182,8 +2303,49 @@ function App() {
                   <option value="out_of_stock">Out of Stock</option>
                 </select>
               </div>
+              {filteredAdminProducts.length > 0 ? (
+                <div className="catalog-pagination mini-top">
+                  <p className="muted small">
+                    Showing {adminProductsRange.start}-{adminProductsRange.end} of {filteredAdminProducts.length} products
+                  </p>
+                  <div className="catalog-pagination-controls">
+                    <button
+                      type="button"
+                      className="ghost catalog-pagination-arrow"
+                      onClick={() => setAdminProductsPage((prev) => Math.max(1, prev - 1))}
+                      disabled={adminProductsPage <= 1}
+                    >
+                      Prev
+                    </button>
+                    {adminProductsPageNumbers.map((pageNumber, index) =>
+                      pageNumber > 0 ? (
+                        <button
+                          key={`admin-catalog-page-${pageNumber}`}
+                          type="button"
+                          className={`ghost catalog-pagination-number ${adminProductsPage === pageNumber ? 'catalog-pagination-number-active' : ''}`}
+                          onClick={() => setAdminProductsPage(pageNumber)}
+                        >
+                          {pageNumber}
+                        </button>
+                      ) : (
+                        <span key={`admin-catalog-page-gap-${index}`} className="catalog-pagination-ellipsis" aria-hidden="true">
+                          ...
+                        </span>
+                      ),
+                    )}
+                    <button
+                      type="button"
+                      className="ghost catalog-pagination-arrow"
+                      onClick={() => setAdminProductsPage((prev) => Math.min(totalAdminProductPages, prev + 1))}
+                      disabled={adminProductsPage >= totalAdminProductPages}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <div className="admin-product-cards">
-                {visibleAdminProducts.map((p) => (
+                {paginatedAdminProducts.map((p) => (
                   <article
                     className={`admin-product-card ${p.inventory <= 0 ? 'stock-out' : p.inventory <= LOW_STOCK_THRESHOLD ? 'stock-low' : 'stock-ok'}`}
                     key={p.id}
@@ -2229,17 +2391,6 @@ function App() {
                   </article>
                 ))}
               </div>
-              {hasMoreAdminProducts ? (
-                <div className="row center mini-top">
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => setAdminProductsVisibleCount((prev) => prev + ADMIN_PRODUCTS_BATCH_SIZE)}
-                  >
-                    Load More Products ({visibleAdminProducts.length}/{filteredAdminProducts.length})
-                  </button>
-                </div>
-              ) : null}
               {filteredAdminProducts.length === 0 ? (
                 <div className="state-card mini-top">No products found for selected filters.</div>
               ) : null}
@@ -2944,12 +3095,22 @@ function App() {
                   value={supplierCreateForm.address}
                   onChange={(e) => setSupplierCreateForm((p) => ({ ...p, address: e.target.value }))}
                 />
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={supplierCreateForm.password}
-                  onChange={(e) => setSupplierCreateForm((p) => ({ ...p, password: e.target.value }))}
-                />
+                <div className="password-field-wrap">
+                  <input
+                    type={showSupplierCreatePassword ? 'text' : 'password'}
+                    placeholder="Password"
+                    value={supplierCreateForm.password}
+                    onChange={(e) => setSupplierCreateForm((p) => ({ ...p, password: e.target.value }))}
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle-btn"
+                    aria-label={showSupplierCreatePassword ? 'Hide password' : 'Show password'}
+                    onClick={() => setShowSupplierCreatePassword((prev) => !prev)}
+                  >
+                    <AppIcon name={showSupplierCreatePassword ? 'eyeOff' : 'eye'} />
+                  </button>
+                </div>
                 <div className="row">
                   <button className="primary" disabled={supplierCreateBusy}>
                     {supplierCreateBusy ? 'Creating...' : 'Create Supplier'}
@@ -3887,7 +4048,22 @@ function App() {
                     value={loginIdentifier}
                     onChange={(e) => setLoginIdentifier(e.target.value)}
                   />
-                  <input type="password" placeholder="Password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
+                  <div className="password-field-wrap">
+                    <input
+                      type={showLoginPassword ? 'text' : 'password'}
+                      placeholder="Password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle-btn"
+                      aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowLoginPassword((prev) => !prev)}
+                    >
+                      <AppIcon name={showLoginPassword ? 'eyeOff' : 'eye'} />
+                    </button>
+                  </div>
                   <button disabled={authBusy} className="primary" onClick={() => void handleLogin()}>
                     {authBusy ? 'Signing in...' : 'Sign In'}
                   </button>
@@ -3941,20 +4117,40 @@ function App() {
                     value={regForm.phone}
                     onChange={(e) => setRegForm((p) => ({ ...p, phone: sanitizePhoneInput(e.target.value) }))}
                   />
-                  <input
-                    type="password"
-                    placeholder="Password"
-                    autoComplete="new-password"
-                    value={regForm.password}
-                    onChange={(e) => setRegForm((p) => ({ ...p, password: e.target.value }))}
-                  />
-                  <input
-                    type="password"
-                    placeholder="Confirm password"
-                    autoComplete="new-password"
-                    value={regConfirmPassword}
-                    onChange={(e) => setRegConfirmPassword(e.target.value)}
-                  />
+                  <div className="password-field-wrap">
+                    <input
+                      type={showRegisterPassword ? 'text' : 'password'}
+                      placeholder="Password"
+                      autoComplete="new-password"
+                      value={regForm.password}
+                      onChange={(e) => setRegForm((p) => ({ ...p, password: e.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle-btn"
+                      aria-label={showRegisterPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowRegisterPassword((prev) => !prev)}
+                    >
+                      <AppIcon name={showRegisterPassword ? 'eyeOff' : 'eye'} />
+                    </button>
+                  </div>
+                  <div className="password-field-wrap">
+                    <input
+                      type={showRegisterConfirmPassword ? 'text' : 'password'}
+                      placeholder="Confirm password"
+                      autoComplete="new-password"
+                      value={regConfirmPassword}
+                      onChange={(e) => setRegConfirmPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle-btn"
+                      aria-label={showRegisterConfirmPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowRegisterConfirmPassword((prev) => !prev)}
+                    >
+                      <AppIcon name={showRegisterConfirmPassword ? 'eyeOff' : 'eye'} />
+                    </button>
+                  </div>
                   <button disabled={authBusy} className="primary" onClick={() => void handleRegister()}>
                     {authBusy ? 'Registering...' : 'Register'}
                   </button>

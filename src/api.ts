@@ -32,9 +32,42 @@ export const api = {
     return data;
   },
 
+  async getProductsPage(limit = 200, offset = 0) {
+    const safeLimit = Math.min(200, Math.max(1, Math.trunc(limit)));
+    const safeOffset = Math.max(0, Math.trunc(offset));
+    const response = await http.get<Product[]>(
+      `/api/products?limit=${safeLimit}&offset=${safeOffset}`,
+    );
+    const totalHeader = response.headers['x-total-count'];
+    const parsedTotal = Number.parseInt(
+      Array.isArray(totalHeader) ? totalHeader[0] ?? '' : String(totalHeader ?? ''),
+      10,
+    );
+    const totalCount = Number.isFinite(parsedTotal) ? parsedTotal : safeOffset + response.data.length;
+    return {
+      items: response.data,
+      totalCount,
+      limit: safeLimit,
+      offset: safeOffset,
+      hasMore: safeOffset + response.data.length < totalCount,
+    };
+  },
+
   async getProducts() {
-    const { data } = await http.get<Product[]>('/api/products');
-    return data;
+    const pageSize = 200;
+    const products: Product[] = [];
+    let offset = 0;
+
+    while (true) {
+      const page = await api.getProductsPage(pageSize, offset);
+      products.push(...page.items);
+      if (!page.hasMore || page.items.length === 0) {
+        break;
+      }
+      offset += page.items.length;
+    }
+
+    return products;
   },
 
   async login(identifier: string, password: string) {

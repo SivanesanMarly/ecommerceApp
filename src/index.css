@@ -618,6 +618,52 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(242, 140, 40, 0.2);
 }
 
+.password-field-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.password-field-wrap input {
+  width: 100%;
+  padding-right: 48px;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #597089;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  cursor: pointer;
+}
+
+.password-toggle-btn:hover {
+  transform: translateY(-50%);
+  background: rgba(89, 112, 137, 0.12);
+}
+
+.password-toggle-btn:focus-visible {
+  outline: 2px solid rgba(242, 140, 40, 0.65);
+  outline-offset: 1px;
+}
+
+.password-toggle-btn .icon-svg {
+  width: 17px;
+  height: 17px;
+}
+
 button {
   border: none;
   cursor: pointer;
@@ -674,6 +720,44 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
   gap: 16px;
+}
+
+.catalog-pagination {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.catalog-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.catalog-pagination-arrow,
+.catalog-pagination-number {
+  min-width: 40px;
+  padding: 8px 10px;
+}
+
+.catalog-pagination-number-active {
+  background: linear-gradient(135deg, #2f8f46, #23743a);
+  color: #fff;
+  border-color: rgba(35, 116, 58, 0.7);
+}
+
+.catalog-pagination-ellipsis {
+  color: var(--muted);
+  min-width: 18px;
+  text-align: center;
 }
 
 .product-card {
@@ -1832,6 +1916,14 @@ button:disabled {
 
   .product-detail-facts {
     grid-template-columns: 1fr;
+  }
+
+  .catalog-pagination {
+    align-items: flex-start;
+  }
+
+  .catalog-pagination-controls {
+    width: 100%;
   }
 }
 
