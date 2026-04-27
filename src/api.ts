@@ -17,7 +17,7 @@ const BASE_URL =
 
 const http = axios.create({
   baseURL: BASE_URL,
-  timeout: 12000,
+  timeout: 30000,
 });
 
 function authHeader(token: string) {
@@ -54,6 +54,17 @@ export const api = {
   },
 
   async getProducts() {
+    // Prefer backend "all products" response in one request.
+    // Both backend variants in this project support /api/products with no limit.
+    try {
+      const { data } = await http.get<Product[]>('/api/products');
+      if (Array.isArray(data) && data.length > 0) {
+        return data;
+      }
+    } catch {
+      // Fallback to paged fetch below.
+    }
+
     const pageSize = 200;
     const products: Product[] = [];
     let offset = 0;

@@ -80,7 +80,7 @@ function App() {
   const [category, setCategory] = useState('All');
   const [subcategory, setSubcategory] = useState('All');
   const [storefrontProductsPage, setStorefrontProductsPage] = useState(1);
-  const [storefrontScreen, setStorefrontScreen] = useState<'departments' | 'collections' | 'products'>('departments');
+  const [storefrontScreen, setStorefrontScreen] = useState<'departments' | 'collections' | 'products'>('products');
   const [authOpen, setAuthOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -719,7 +719,7 @@ function App() {
   useEffect(() => {
     if (activePage !== 'home') return;
     if (category === 'All') {
-      setStorefrontScreen('departments');
+      setStorefrontScreen('products');
       return;
     }
     if (subcategory === 'All') {
@@ -878,7 +878,7 @@ function App() {
   function chooseDepartment(nextDepartment: string) {
     setCategory(nextDepartment);
     setSubcategory('All');
-    setStorefrontScreen(nextDepartment === 'All' ? 'departments' : 'collections');
+    setStorefrontScreen(nextDepartment === 'All' ? 'products' : 'collections');
   }
 
   function chooseCollection(nextCollection: string) {
@@ -889,7 +889,7 @@ function App() {
   function resetCatalogNavigation() {
     setCategory('All');
     setSubcategory('All');
-    setStorefrontScreen('departments');
+    setStorefrontScreen('products');
   }
 
   function addToCart(product: Product) {
