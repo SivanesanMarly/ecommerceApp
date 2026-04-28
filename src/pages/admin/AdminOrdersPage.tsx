@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { AppIcon } from '../../components/common/AppIcon';
-import type { OrderHistoryItem } from '../../types';
+import type { OrderHistoryItem, Product } from '../../types';
 import {
   allowedAdminOrderTransitions,
   displayName,
@@ -9,6 +9,21 @@ import {
   money,
   statusClass,
 } from '../../utils/presentation';
+
+const ORDER_ITEM_QTY_SUFFIX = /\s+x\s+\d+\s*$/i;
+
+function parseOrderItemForTable(item: string) {
+  const raw = item.trim();
+  const qtyMatch = raw.match(/x\s+(\d+)\s*$/i);
+  const quantity = qtyMatch ? Number(qtyMatch[1]) : null;
+  const name = raw.replace(ORDER_ITEM_QTY_SUFFIX, '').trim() || raw;
+  return { name, quantity };
+}
+
+type OrderPreview = {
+  previewProducts: Product[];
+  hiddenPreviewCount: number;
+};
 
 type AdminOrdersPageProps = {
   adminOrders: OrderHistoryItem[];
@@ -21,6 +36,7 @@ type AdminOrdersPageProps = {
   adminOrderStatusUpdatingId: string | null;
   setAdminOrdersSearch: (value: string) => void;
   setAdminOrdersStatusFilter: (value: string) => void;
+  orderPreviewById: Map<string, OrderPreview>;
   onOpenOrder: (orderId: string) => void | Promise<void>;
   onUpdateAdminOrder: (orderId: string, status: string) => void | Promise<void>;
 };
@@ -36,6 +52,7 @@ export function AdminOrdersPage({
   adminOrderStatusUpdatingId,
   setAdminOrdersSearch,
   setAdminOrdersStatusFilter,
+  orderPreviewById,
   onOpenOrder,
   onUpdateAdminOrder,
 }: AdminOrdersPageProps) {
@@ -92,12 +109,14 @@ export function AdminOrdersPage({
               ))}
             </select>
           </div>
-          <div className="admin-product-cards">
+          <div className="admin-product-cards orders-grid-two">
             {filteredAdminOrders.map((order) => {
               const allowedTransitions = allowedAdminOrderTransitions(order.status);
               const selectableStatuses = [order.status, ...allowedTransitions];
               const isLocked = allowedTransitions.length === 0;
               const isUpdating = adminOrderStatusUpdatingId === order.order_id;
+              const preview = orderPreviewById.get(order.order_id);
+              const mockImage = '/app_logo.jpeg';
               return (
                 <article
                   className="admin-product-card clickable-card"
@@ -122,13 +141,64 @@ export function AdminOrdersPage({
                       </button>
                     </div>
                   </div>
-                  <p className="muted small">Placed {formatTime(order.created_at)}</p>
+                  <div className="live-order-split">
+                    <div className="live-order-media">
+                      {preview && preview.previewProducts.length === 1 ? (
+                        <div className="live-order-single-image">
+                          <img
+                            src={(preview.previewProducts[0].image_url || '').trim() || mockImage}
+                            alt={preview.previewProducts[0].name}
+                            loading="lazy"
+                          />
+                        </div>
+                      ) : null}
+                      {preview && preview.previewProducts.length > 1 ? (
+                        <div className="live-order-flipbook">
+                          {preview.previewProducts.map((product, index) => (
+                            <figure
+                              className="live-order-page"
+                              key={`${order.order_id}-${product.id}`}
+                              style={{
+                                animationDelay: `${index * 2.2}s`,
+                                animationDuration: `${Math.max(6, preview.previewProducts.length * 2.2)}s`,
+                                zIndex: preview.previewProducts.length - index,
+                              }}
+                            >
+                              <img src={(product.image_url || '').trim() || mockImage} alt={product.name} loading="lazy" />
+                            </figure>
+                          ))}
+                          {preview.hiddenPreviewCount > 0 ? (
+                            <span className="live-order-thumb-more live-order-thumb-more-overlay">+{preview.hiddenPreviewCount}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {!preview || preview.previewProducts.length === 0 ? (
+                        <div className="live-order-single-image">
+                          <img src={mockImage} alt="Sample product" loading="lazy" />
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="live-order-details">
+                      <div className="live-order-items-table" aria-label="Order contents">
+                        {order.items.map((item, index) => {
+                          const parsedItem = parseOrderItemForTable(item);
+                          return (
+                            <div className="live-order-items-row" key={`${order.order_id}-item-${index}`}>
+                              <span className="live-order-items-name">{parsedItem.name}</span>
+                              <span className="live-order-items-qty">x{parsedItem.quantity ?? 1}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="row between">
+                        <strong>{money(order.total_amount)}</strong>
+                      </div>
+                    </div>
+                  </div>
                   <p className="muted small">
                     Address: {order.customer_address?.trim() ? order.customer_address : 'Not available'}
                   </p>
-                  <p className="muted admin-product-sub">{order.items.join(', ')}</p>
                   <div className="row between">
-                    <strong>{money(order.total_amount)}</strong>
                     <select
                       value={order.status}
                       onClick={(e) => e.stopPropagation()}
@@ -142,9 +212,10 @@ export function AdminOrdersPage({
                       ))}
                     </select>
                   </div>
-                  <div className="row between">
+                  <div className="live-order-footer row between">
+                    <p className="muted small">Placed {formatTime(order.created_at)}</p>
                     <span className="muted small">
-                      {isUpdating ? 'Updating status...' : isLocked ? '' : 'Status enabled'}
+                      {isUpdating ? 'Updating status...' : isLocked ? 'No status actions' : 'Status enabled'}
                     </span>
                   </div>
                 </article>

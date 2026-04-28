@@ -53,6 +53,11 @@ export const api = {
     };
   },
 
+  async getStorefrontProducts() {
+    const { data } = await http.get<Product[]>('/api/products?group_variants=1');
+    return data;
+  },
+
   async getProducts() {
     // Prefer backend "all products" response in one request.
     // Both backend variants in this project support /api/products with no limit.

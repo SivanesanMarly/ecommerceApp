@@ -1,4 +1,5 @@
 export type AppIconName =
+  | 'back'
   | 'user'
   | 'settings'
   | 'bell'
@@ -17,6 +18,7 @@ export type AppIconName =
 
 export function AppIcon({ name, className = '', label }: { name: AppIconName; className?: string; label?: string }) {
   const paths: Record<AppIconName, string> = {
+    back: 'M19 12H5m6-6-6 6 6 6',
     user: 'M20 21a8 8 0 1 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
     settings:
       'M12 3v2m0 14v2m9-9h-2M5 12H3m15.6 6.6-1.4-1.4M6.8 6.8 5.4 5.4m12.2 0-1.4 1.4M6.8 17.2l-1.4 1.4M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',

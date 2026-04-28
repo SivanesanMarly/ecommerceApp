@@ -1,8 +1,9 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import './index.css';
 import { api, getApiError } from './api';
 import { AppIcon } from './components/common/AppIcon';
+import type { AppIconName } from './components/common/AppIcon';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage';
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage';
 import { UserOrdersPage } from './pages/user/UserOrdersPage';
@@ -17,6 +18,8 @@ import {
   PHONE_MAX_LENGTH,
   PHONE_REGEX,
   STORAGE_CART,
+  STORAGE_DELIVERY_LOCATION,
+  STORAGE_PROFILE_PHOTO,
   STORAGE_SESSION,
   STORAGE_UI_SETTINGS,
   SUPPLY_ORDER_STATUS_OPTIONS,
@@ -66,10 +69,57 @@ type Cart = Record<string, number>;
 const brandLogo = '/app_logo.jpeg';
 const STOREFRONT_PRODUCTS_PER_PAGE = 16;
 const ADMIN_PRODUCTS_PER_PAGE = 24;
+const DEALS_PREVIEW_LIMIT = 6;
+const ORDER_ITEM_QTY_SUFFIX = /\s+x\s+\d+\s*$/i;
+
+type LiveOrderPreview = {
+  previewProducts: Product[];
+  hiddenPreviewCount: number;
+};
+
+type DeliveryLocationState = {
+  label: string;
+  latitude: number | null;
+  longitude: number | null;
+  confirmedAt: string;
+};
+
+const normalizeLookupKey = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
+const extractOrderItemName = (item: string) => item.replace(ORDER_ITEM_QTY_SUFFIX, '').trim();
+
+function parseOrderItemForTable(item: string) {
+  const raw = item.trim();
+  const qtyMatch = raw.match(/x\s+(\d+)\s*$/i);
+  const quantity = qtyMatch ? Number(qtyMatch[1]) : null;
+  const name = extractOrderItemName(raw) || raw;
+  return { name, quantity };
+}
+
+function pickDeterministicImage(images: string[], seed: string): string | null {
+  if (images.length === 0) return null;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return images[hash % images.length];
+}
+
+function productVariants(product: Product): Product[] {
+  return Array.isArray(product.variants) && product.variants.length > 0 ? product.variants : [product];
+}
+
+function primaryStorefrontVariant(product: Product): Product {
+  const variants = productVariants(product);
+  return variants.find((variant) => variant.id === product.id)
+    || variants.find((variant) => variant.inventory > 0)
+    || variants[0];
+}
 
 function App() {
   const [shop, setShop] = useState<Shop | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  const [storefrontProducts, setStorefrontProducts] = useState<Product[]>([]);
   const [, setLoading] = useState(true);
   const [, setError] = useState('');
 
@@ -120,6 +170,7 @@ function App() {
   const [history, setHistory] = useState<OrderHistoryItem[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<OrderDetail | null>(null);
   const [selectedProductDetail, setSelectedProductDetail] = useState<Product | null>(null);
+  const [selectedProductVariantId, setSelectedProductVariantId] = useState<string | null>(null);
   const [selectedSupplierDetail, setSelectedSupplierDetail] = useState<Supplier | null>(null);
 
   const [adminOrders, setAdminOrders] = useState<OrderHistoryItem[]>([]);
@@ -197,9 +248,17 @@ function App() {
     is_open: true,
   });
   const [shopSettingsBusy, setShopSettingsBusy] = useState(false);
+  const [deliveryLocation, setDeliveryLocation] = useState<DeliveryLocationState | null>(null);
+  const [pendingDeliveryLocation, setPendingDeliveryLocation] = useState<{ label: string; latitude: number | null; longitude: number | null } | null>(null);
+  const [deliveryLocationLoading, setDeliveryLocationLoading] = useState(false);
+  const [deliveryLocationError, setDeliveryLocationError] = useState('');
+  const [manualDeliveryLocationOpen, setManualDeliveryLocationOpen] = useState(false);
+  const [manualDeliveryLocationInput, setManualDeliveryLocationInput] = useState('');
+  const [profilePhotoDataUrl, setProfilePhotoDataUrl] = useState('');
+  const profilePhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   const catalogProducts = useMemo(() => {
-    return products.map((product) => {
+    return storefrontProducts.map((product) => {
       const department = productCategoryLabel(product.category);
       const parsed = parseCategoryLevels(department);
       const collection = productSubcategoryLabel(product.subcategory, parsed.collection);
@@ -209,14 +268,14 @@ function App() {
         collection,
       };
     });
-  }, [products]);
+  }, [storefrontProducts]);
 
   const categories = useMemo(() => {
     const unique = new Set(catalogProducts.map((item) => item.department));
     return ['All', ...Array.from(unique).sort((a, b) => a.localeCompare(b))];
   }, [catalogProducts]);
 
-  const highlightedCategories = useMemo(() => categories.slice(1, 7), [categories]);
+  const highlightedCategories = useMemo(() => categories.filter((item) => item !== 'All'), [categories]);
   const featuredDeals = useMemo(() => {
     const now = Date.now();
     const inWindow = (product: Product) => {
@@ -236,21 +295,22 @@ function App() {
       const bPct = (b.compare_at_price - b.price) / b.compare_at_price;
       return bPct - aPct;
     };
-    const configuredDeals = products.filter(inWindow).sort(sortDeals);
+    const configuredDeals = storefrontProducts.filter(inWindow).sort(sortDeals);
     if (configuredDeals.length > 0) return configuredDeals.slice(0, 12);
-    return [...products]
+    return [...storefrontProducts]
       .filter((product) => product.compare_at_price > product.price)
       .sort(sortDeals)
       .slice(0, 12);
-  }, [products]);
+  }, [storefrontProducts]);
+  const featuredDealsPreview = useMemo(() => featuredDeals.slice(0, DEALS_PREVIEW_LIMIT), [featuredDeals]);
   const popularPicks = useMemo(() => {
-    return [...products]
+    return [...storefrontProducts]
       .sort((a, b) => {
         if (b.rating !== a.rating) return b.rating - a.rating;
         return b.featured_score - a.featured_score;
       })
       .slice(0, 12);
-  }, [products]);
+  }, [storefrontProducts]);
   const subcategoryOptions = useMemo(() => {
     if (category === 'All') return ['All'];
     const options = new Set(
@@ -262,10 +322,25 @@ function App() {
   }, [catalogProducts, category]);
 
   const searchQuery = useMemo(() => search.trim().toLowerCase(), [search]);
+  const catalogSearchSuggestions = useMemo(() => {
+    const names = new Set<string>();
+    const query = search.trim().toLowerCase();
+    for (const item of catalogProducts) {
+      const name = productDisplayName(item.product.name, '').trim();
+      if (!name) continue;
+      if (query && !name.toLowerCase().includes(query)) continue;
+      names.add(name);
+      if (names.size >= 12) break;
+    }
+    return Array.from(names);
+  }, [catalogProducts, search]);
 
   const searchFilteredCatalogProducts = useMemo(() => {
     if (searchQuery.length === 0) return catalogProducts;
     return catalogProducts.filter((item) => {
+      const variantText = productVariants(item.product)
+        .map((variant) => `${variant.name} ${variant.variant_label || ''}`)
+        .join(' ');
       const searchable = [
         item.product.name,
         item.product.description,
@@ -273,6 +348,7 @@ function App() {
         productBrandLabel(item.product.brand, ''),
         item.department,
         item.collection,
+        variantText,
       ]
         .join(' ')
         .toLowerCase();
@@ -339,13 +415,27 @@ function App() {
     pages.push(totalStorefrontProductPages);
     return pages;
   }, [totalStorefrontProductPages, storefrontProductsPage]);
+  const allKnownProducts = useMemo(() => {
+    const merged = new Map<string, Product>();
+    const add = (product: Product) => {
+      if (!merged.has(product.id)) {
+        merged.set(product.id, product);
+      }
+    };
+    storefrontProducts.forEach((product) => {
+      add(product);
+      productVariants(product).forEach(add);
+    });
+    products.forEach(add);
+    return Array.from(merged.values());
+  }, [storefrontProducts, products]);
 
   const cartProducts = useMemo(() => {
     return Object.entries(cart)
       .filter(([, qty]) => qty > 0)
-      .map(([id, qty]) => ({ product: products.find((p) => p.id === id), qty }))
+      .map(([id, qty]) => ({ product: allKnownProducts.find((p) => p.id === id), qty }))
       .filter((x): x is { product: Product; qty: number } => Boolean(x.product));
-  }, [cart, products]);
+  }, [cart, allKnownProducts]);
 
   const cartTotal = useMemo(() => {
     return cartProducts.reduce((sum, item) => sum + item.product.price * item.qty, 0);
@@ -354,7 +444,7 @@ function App() {
   const isAdmin = session?.role === 'admin';
   const isSupplier = session?.role === 'supplier';
   const isUser = Boolean(session?.token) && !isAdmin && !isSupplier;
-  const showStorefrontContent = !session?.token || activePage === 'home';
+  const showStorefrontContent = activePage === 'home';
   const sortedAdminProducts = useMemo(() => {
     return [...products].sort((a, b) => {
       if (a.inventory !== b.inventory) return a.inventory - b.inventory;
@@ -453,17 +543,17 @@ function App() {
     const q = deferredAdminProductsSearch.trim().toLowerCase();
     return sortedAdminProductsIndex
       .filter(({ product, searchable }) => {
-      const categoryLabel = productCategoryLabel(product.category);
-      const matchesSearch =
+        const categoryLabel = productCategoryLabel(product.category);
+        const matchesSearch =
           q.length === 0 || searchable.includes(q);
-      const matchesCategory =
-        adminProductsCategoryFilter === 'All' || categoryLabel === adminProductsCategoryFilter;
-      const matchesStock =
-        adminProductsStockFilter === 'all' ||
-        (adminProductsStockFilter === 'out_of_stock' && product.inventory <= 0) ||
-        (adminProductsStockFilter === 'low_stock' && product.inventory > 0 && product.inventory <= LOW_STOCK_THRESHOLD) ||
-        (adminProductsStockFilter === 'in_stock' && product.inventory > LOW_STOCK_THRESHOLD);
-      return matchesSearch && matchesCategory && matchesStock;
+        const matchesCategory =
+          adminProductsCategoryFilter === 'All' || categoryLabel === adminProductsCategoryFilter;
+        const matchesStock =
+          adminProductsStockFilter === 'all' ||
+          (adminProductsStockFilter === 'out_of_stock' && product.inventory <= 0) ||
+          (adminProductsStockFilter === 'low_stock' && product.inventory > 0 && product.inventory <= LOW_STOCK_THRESHOLD) ||
+          (adminProductsStockFilter === 'in_stock' && product.inventory > LOW_STOCK_THRESHOLD);
+        return matchesSearch && matchesCategory && matchesStock;
       })
       .map(({ product }) => product);
   }, [
@@ -538,6 +628,205 @@ function App() {
       return s !== 'delivered' && s !== 'cancelled';
     });
   }, [history]);
+  const productByNameLookup = useMemo(() => {
+    const lookup = new Map<string, Product>();
+    for (const product of allKnownProducts) {
+      const primary = normalizeLookupKey(productDisplayName(product.name, product.id));
+      if (!lookup.has(primary)) {
+        lookup.set(primary, product);
+      }
+      const raw = normalizeLookupKey(product.name);
+      if (!lookup.has(raw)) {
+        lookup.set(raw, product);
+      }
+    }
+    return lookup;
+  }, [allKnownProducts]);
+  const liveOrderPreviewById = useMemo(() => {
+    const byId = new Map<string, LiveOrderPreview>();
+    const orders = [...adminOrders, ...history];
+    for (const order of orders) {
+      const seenProductIds = new Set<string>();
+      const matchedProducts: Product[] = [];
+
+      for (const item of order.items) {
+        const itemName = extractOrderItemName(item);
+        if (!itemName) continue;
+        const matched = productByNameLookup.get(normalizeLookupKey(itemName));
+        if (!matched) continue;
+        if (seenProductIds.has(matched.id)) continue;
+        seenProductIds.add(matched.id);
+        matchedProducts.push(matched);
+      }
+
+      byId.set(order.order_id, {
+        previewProducts: matchedProducts.slice(0, 4),
+        hiddenPreviewCount: Math.max(0, matchedProducts.length - 4),
+      });
+    }
+    return byId;
+  }, [productByNameLookup, adminOrders, history]);
+  const liveOrderMockImagePool = useMemo(() => {
+    const fromDeals = featuredDeals
+      .map((product) => (product.image_url || '').trim())
+      .filter((image) => image.length > 0);
+    if (fromDeals.length > 0) return fromDeals;
+    return allKnownProducts
+      .map((product) => (product.image_url || '').trim())
+      .filter((image) => image.length > 0)
+      .slice(0, 24);
+  }, [featuredDeals, allKnownProducts]);
+  const selectedOrderItemDetails = useMemo(() => {
+    if (!selectedOrder) return [] as Array<{
+      imageUrl: string;
+      productName: string;
+      quantity: number;
+      unitPrice: number;
+      lineTotal: number;
+      taxPercent: number;
+      discountPercent: number;
+    }>;
+    return selectedOrder.items.map((item, index) => {
+      const product = productByNameLookup.get(normalizeLookupKey(item.product_name));
+      const fallbackImage =
+        pickDeterministicImage(liveOrderMockImagePool, `${selectedOrder.order_id}-${item.product_name}-${index}`) || brandLogo;
+      return {
+        imageUrl: (product?.image_url || '').trim() || fallbackImage,
+        productName: item.product_name,
+        quantity: item.quantity,
+        unitPrice: item.unit_price,
+        lineTotal: item.line_total,
+        taxPercent: Number(product?.tax_percent || 0),
+        discountPercent: Number(product?.discount_percent || 0),
+      };
+    });
+  }, [selectedOrder, productByNameLookup, liveOrderMockImagePool]);
+  const selectedOrderCheckoutSummary = useMemo(() => {
+    if (!selectedOrder) {
+      return {
+        subtotal: 0,
+        discount: 0,
+        tax: 0,
+        gst: 0,
+        total: 0,
+      };
+    }
+    const subtotal = selectedOrder.items.reduce((sum, item) => sum + Number(item.line_total || 0), 0);
+    const total = Number(selectedOrder.total_amount || 0);
+    // Current backend checkout stores subtotal as total amount with no tax/discount deduction.
+    return {
+      subtotal,
+      discount: 0,
+      tax: 0,
+      gst: 0,
+      total,
+    };
+  }, [selectedOrder]);
+  const selectedOrderEmail = useMemo(() => {
+    if (!selectedOrder) return 'Not available';
+    if (!isAdmin) {
+      const email = (session?.email || '').trim();
+      return email || 'Not available';
+    }
+    return 'Not available';
+  }, [selectedOrder, isAdmin, session?.email]);
+  const selectedOrderTimeline = useMemo(() => {
+    if (!selectedOrder) return [];
+    return buildOrderTimelineSteps(selectedOrder).map((step) => {
+      const normalized = step.status.toLowerCase();
+      let icon: AppIconName = 'history';
+      if (normalized === 'pending') icon = 'hourglass';
+      else if (normalized === 'confirmed') icon = 'receipt';
+      else if (normalized === 'packed') icon = 'package';
+      else if (normalized === 'out_for_delivery') icon = 'cart';
+      else if (normalized === 'delivered') icon = 'home';
+      else if (normalized === 'cancelled') icon = 'x';
+      return { ...step, icon };
+    });
+  }, [selectedOrder]);
+  const selectedOrderTimelineStyle = useMemo<CSSProperties>(() => {
+    if (selectedOrderTimeline.length <= 1) {
+      return { ['--order-progress' as any]: '0%' };
+    }
+    const currentIndex = selectedOrderTimeline.findIndex((step) => step.isCurrent);
+    const resolvedIndex = currentIndex >= 0 ? currentIndex : Math.max(0, selectedOrderTimeline.length - 1);
+    const progressPct = (resolvedIndex / Math.max(1, selectedOrderTimeline.length - 1)) * 100;
+    return { ['--order-progress' as any]: `${progressPct}%` };
+  }, [selectedOrderTimeline]);
+  const selectedStorefrontVariant = useMemo(() => {
+    if (!selectedProductDetail) return null;
+    const variants = productVariants(selectedProductDetail);
+    return variants.find((variant) => variant.id === selectedProductVariantId)
+      || variants.find((variant) => variant.id === selectedProductDetail.id)
+      || variants[0]
+      || null;
+  }, [selectedProductDetail, selectedProductVariantId]);
+  const selectedProductDetailMeta = useMemo(() => {
+    if (!selectedProductDetail || !selectedStorefrontVariant) return null;
+    const hasDiscount = selectedStorefrontVariant.compare_at_price > selectedStorefrontVariant.price;
+    const computedDiscount = hasDiscount
+      ? Math.max(
+        1,
+        Math.round(((selectedStorefrontVariant.compare_at_price - selectedStorefrontVariant.price) / selectedStorefrontVariant.compare_at_price) * 100),
+      )
+      : 0;
+    const discountPercent = Number(selectedStorefrontVariant.discount_percent || 0) > 0 ? Number(selectedStorefrontVariant.discount_percent) : computedDiscount;
+    const categoryLabel = productCategoryLabel(selectedProductDetail.category);
+    const productSubcategory = productSubcategoryLabel(selectedProductDetail.subcategory, '');
+    const categoryPath = productSubcategory && productSubcategory.toLowerCase() !== categoryLabel.toLowerCase()
+      ? `${categoryLabel} / ${productSubcategory}`
+      : categoryLabel;
+    const stockState = (selectedStorefrontVariant.stock_status || '').trim() || (selectedStorefrontVariant.inventory > 0 ? 'available' : 'sold');
+    const supplierName = (selectedStorefrontVariant.supplier_name || '').trim() || 'Direct';
+    return {
+      categoryPath,
+      hasDiscount,
+      discountPercent,
+      saveAmount: Math.max(0, selectedStorefrontVariant.compare_at_price - selectedStorefrontVariant.price),
+      description: selectedStorefrontVariant.short_description?.trim() || selectedStorefrontVariant.description || 'No description available.',
+      stockState: formatStatusText(stockState),
+      supplierName,
+      dealBadge: (selectedStorefrontVariant.deal_badge || '').trim(),
+    };
+  }, [selectedProductDetail, selectedStorefrontVariant]);
+  const recommendedProducts = useMemo(() => {
+    if (!selectedProductDetail) return [] as Product[];
+    const currentCategory = productCategoryLabel(selectedProductDetail.category, '').toLowerCase();
+    const currentSubcategory = productSubcategoryLabel(selectedProductDetail.subcategory, '').toLowerCase();
+    const currentBrand = productBrandLabel(selectedProductDetail.brand, '').toLowerCase();
+
+    const candidates = storefrontProducts
+      .filter((product) => product.id !== selectedProductDetail.id)
+      .filter((product) => {
+        const productCategory = productCategoryLabel(product.category, '').toLowerCase();
+        const productSubcategory = productSubcategoryLabel(product.subcategory, '').toLowerCase();
+        if (currentSubcategory) {
+          return productSubcategory === currentSubcategory;
+        }
+        if (currentCategory) {
+          return productCategory === currentCategory;
+        }
+        return false;
+      });
+
+    const scored = candidates
+      .map((product) => {
+        const productCategory = productCategoryLabel(product.category, '').toLowerCase();
+        const productSubcategory = productSubcategoryLabel(product.subcategory, '').toLowerCase();
+        const productBrand = productBrandLabel(product.brand, '').toLowerCase();
+        let score = 0;
+        if (currentSubcategory && productSubcategory && currentSubcategory === productSubcategory) score += 5;
+        if (currentCategory && productCategory && currentCategory === productCategory) score += 3;
+        if (currentBrand && productBrand && currentBrand === productBrand) score += 2;
+        if (product.inventory > 0) score += 1;
+        score += Number(product.rating || 0) * 0.15;
+        score += Number(product.featured_score || 0) * 0.01;
+        return { product, score };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    return scored.slice(0, 20).map((item) => item.product);
+  }, [storefrontProducts, selectedProductDetail]);
   const recent24HourUserOrdersCount = useMemo(() => {
     const since = Date.now() - 24 * 60 * 60 * 1000;
     return history.filter((order) => {
@@ -641,6 +930,47 @@ function App() {
   }, [session]);
 
   useEffect(() => {
+    if (!session?.user_id) {
+      setDeliveryLocation(null);
+      setPendingDeliveryLocation(null);
+      setDeliveryLocationError('');
+      return;
+    }
+    const key = `${STORAGE_DELIVERY_LOCATION}_${session.user_id}`;
+    const savedLocation = localStorage.getItem(key);
+    if (!savedLocation) {
+      setDeliveryLocation(null);
+      return;
+    }
+    try {
+      setDeliveryLocation(JSON.parse(savedLocation) as DeliveryLocationState);
+    } catch {
+      localStorage.removeItem(key);
+      setDeliveryLocation(null);
+    }
+  }, [session?.user_id]);
+
+  useEffect(() => {
+    if (!session?.user_id) return;
+    const key = `${STORAGE_DELIVERY_LOCATION}_${session.user_id}`;
+    if (!deliveryLocation) {
+      localStorage.removeItem(key);
+      return;
+    }
+    localStorage.setItem(key, JSON.stringify(deliveryLocation));
+  }, [session?.user_id, deliveryLocation]);
+
+  useEffect(() => {
+    if (!session?.user_id) {
+      setProfilePhotoDataUrl('');
+      return;
+    }
+    const key = `${STORAGE_PROFILE_PHOTO}_${session.user_id}`;
+    const saved = localStorage.getItem(key);
+    setProfilePhotoDataUrl(saved || '');
+  }, [session?.user_id]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_UI_SETTINGS, JSON.stringify(uiSettings));
   }, [uiSettings]);
 
@@ -733,9 +1063,9 @@ function App() {
     setLoading(true);
     setError('');
     try {
-      const [shopData, productsData] = await Promise.all([api.getShop(), api.getProducts()]);
+      const [shopData, productsData] = await Promise.all([api.getShop(), api.getStorefrontProducts()]);
       setShop(shopData);
-      setProducts(productsData);
+      setStorefrontProducts(productsData);
     } catch (e) {
       setError(getApiError(e));
     } finally {
@@ -746,19 +1076,21 @@ function App() {
   async function loadRealtime(active: Session) {
     try {
       const [publicProducts, notification] = await Promise.all([
-        api.getProducts(),
+        api.getStorefrontProducts(),
         api.getUnreadNotifications(active.token),
       ]);
-      setProducts(publicProducts);
+      setStorefrontProducts(publicProducts);
       setNotice(notification);
 
       if (active.role === 'admin') {
-        const [orders, supply] = await Promise.all([
+        const [orders, supply, flatProducts] = await Promise.all([
           api.getAdminOrders(active.token),
           api.getAdminSupplyOrders(active.token),
+          api.getProducts(),
         ]);
         setAdminOrders(orders);
         setAdminSupplyOrders(supply);
+        setProducts(flatProducts);
       }
 
       if (active.role === 'supplier') {
@@ -801,14 +1133,16 @@ function App() {
 
     if (active.role === 'admin') {
       try {
-        const [orders, supply, supplierList] = await Promise.all([
+        const [orders, supply, supplierList, flatProducts] = await Promise.all([
           api.getAdminOrders(active.token),
           api.getAdminSupplyOrders(active.token),
           api.getSuppliers(active.token),
+          api.getProducts(),
         ]);
         setAdminOrders(orders);
         setAdminSupplyOrders(supply);
         setSuppliers(supplierList);
+        setProducts(flatProducts);
         if (supplierList[0]) {
           setSelectedSupplierId((prev) => prev || supplierList[0].user_id);
         }
@@ -873,6 +1207,12 @@ function App() {
   function setPage(page: AppPage) {
     setActivePage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function openProductDetailsPage(product: Product) {
+    setSelectedProductDetail(product);
+    setSelectedProductVariantId(primaryStorefrontVariant(product).id);
+    setPage('product-details');
   }
 
   function chooseDepartment(nextDepartment: string) {
@@ -1116,6 +1456,11 @@ function App() {
       setToast('Please login to checkout');
       return;
     }
+    if (isUser && !deliveryLocation) {
+      setToast('Please confirm your delivery location from the Home page before checkout.');
+      setPage('home');
+      return;
+    }
     try {
       await api.checkout(session.token, cart);
       setCart({});
@@ -1334,8 +1679,9 @@ function App() {
         await api.createAdminProduct(session.token, payload);
         setToast('Product created');
       }
-      const list = await api.getProducts();
+      const [list, storefrontList] = await Promise.all([api.getProducts(), api.getStorefrontProducts()]);
       setProducts(list);
+      setStorefrontProducts(storefrontList);
       resetAdminProductEditor();
     } catch (e) {
       setToast(getApiError(e));
@@ -1350,8 +1696,9 @@ function App() {
     setAdminProductDeletingId(productId);
     try {
       await api.deleteAdminProduct(session.token, productId);
-      const list = await api.getProducts();
+      const [list, storefrontList] = await Promise.all([api.getProducts(), api.getStorefrontProducts()]);
       setProducts(list);
+      setStorefrontProducts(storefrontList);
       if (editingAdminProductId === productId) {
         resetAdminProductEditor();
       }
@@ -1608,6 +1955,114 @@ function App() {
     }
   }
 
+  async function detectDeliveryLocation() {
+    if (!navigator.geolocation) {
+      setDeliveryLocationError('Location is not supported in this browser.');
+      return;
+    }
+    setDeliveryLocationLoading(true);
+    setDeliveryLocationError('');
+    setPendingDeliveryLocation(null);
+    setManualDeliveryLocationOpen(false);
+    setManualDeliveryLocationInput('');
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 30000,
+        });
+      });
+      const latitude = Number(position.coords.latitude.toFixed(6));
+      const longitude = Number(position.coords.longitude.toFixed(6));
+      let label = `Lat ${latitude}, Lng ${longitude}`;
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`,
+        );
+        if (response.ok) {
+          const data = (await response.json()) as { display_name?: string };
+          const resolved = data.display_name?.trim();
+          if (resolved) label = resolved;
+        }
+      } catch {
+        // Keep coordinate fallback.
+      }
+      setPendingDeliveryLocation({ label, latitude, longitude });
+    } catch (error) {
+      const geoError = error as GeolocationPositionError;
+      if (geoError?.code === 1) {
+        setDeliveryLocationError('Location permission denied. Enable location access and try again.');
+      } else if (geoError?.code === 3) {
+        setDeliveryLocationError('Location request timed out. Please try again.');
+      } else {
+        setDeliveryLocationError('Unable to fetch your location right now.');
+      }
+    } finally {
+      setDeliveryLocationLoading(false);
+    }
+  }
+
+  function confirmPendingDeliveryLocation() {
+    if (!pendingDeliveryLocation) return;
+    setDeliveryLocation({
+      ...pendingDeliveryLocation,
+      confirmedAt: new Date().toISOString(),
+    });
+    setPendingDeliveryLocation(null);
+    setDeliveryLocationError('');
+    setToast('Delivery location confirmed');
+  }
+
+  function onSelectProfilePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !session?.user_id) return;
+    if (!file.type.startsWith('image/')) {
+      setToast('Please choose an image file.');
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setToast('Profile photo must be under 4MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!result) {
+        setToast('Unable to load the selected image.');
+        return;
+      }
+      const key = `${STORAGE_PROFILE_PHOTO}_${session.user_id}`;
+      localStorage.setItem(key, result);
+      setProfilePhotoDataUrl(result);
+      setToast('Profile photo updated.');
+    };
+    reader.onerror = () => {
+      setToast('Unable to read selected image.');
+    };
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  }
+
+  function confirmManualDeliveryLocation() {
+    const label = manualDeliveryLocationInput.trim();
+    if (label.length < 5) {
+      setDeliveryLocationError('Please enter a complete delivery address.');
+      return;
+    }
+    setDeliveryLocation({
+      label,
+      latitude: null,
+      longitude: null,
+      confirmedAt: new Date().toISOString(),
+    });
+    setManualDeliveryLocationOpen(false);
+    setManualDeliveryLocationInput('');
+    setPendingDeliveryLocation(null);
+    setDeliveryLocationError('');
+    setToast('Delivery location confirmed');
+  }
+
   return (
     <div className="site-root">
       <div className="aurora" />
@@ -1715,6 +2170,84 @@ function App() {
             </article>
           </motion.section>
 
+          {isUser && activePage === 'home' ? (
+            <section className="panel delivery-location-panel">
+              <div className="products-head-row">
+                <div>
+                  <h3>Delivery Location</h3>
+                  <p className="muted">Use live location and confirm where we should deliver your order.</p>
+                </div>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void detectDeliveryLocation()}
+                  disabled={deliveryLocationLoading}
+                >
+                  {deliveryLocationLoading ? 'Detecting...' : 'Use Current Location'}
+                </button>
+              </div>
+              {deliveryLocation ? (
+                <div className="delivery-location-confirmed">
+                  <p className="muted small">Current delivery location</p>
+                  <strong>{deliveryLocation.label}</strong>
+                </div>
+              ) : (
+                <p className="muted small">No confirmed delivery location yet.</p>
+              )}
+              {pendingDeliveryLocation ? (
+                <div className="delivery-location-pending">
+                  <p className="muted small">Confirm this delivery location</p>
+                  <strong>{pendingDeliveryLocation.label}</strong>
+                  <div className="delivery-location-actions">
+                    <button type="button" className="primary" onClick={confirmPendingDeliveryLocation}>
+                      Confirm Location
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setPendingDeliveryLocation(null);
+                        setDeliveryLocationError('');
+                        setManualDeliveryLocationOpen(true);
+                      }}
+                    >
+                      Not This Location
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {manualDeliveryLocationOpen ? (
+                <div className="delivery-location-pending">
+                  <p className="muted small">Enter your delivery location</p>
+                  <input
+                    className="input"
+                    type="text"
+                    value={manualDeliveryLocationInput}
+                    onChange={(e) => setManualDeliveryLocationInput(e.target.value)}
+                    placeholder="Flat / Street / Area / Landmark / City"
+                  />
+                  <div className="delivery-location-actions">
+                    <button type="button" className="primary" onClick={confirmManualDeliveryLocation}>
+                      Confirm Typed Location
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setManualDeliveryLocationOpen(false);
+                        setManualDeliveryLocationInput('');
+                        setDeliveryLocationError('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {deliveryLocationError ? <p className="status danger">{deliveryLocationError}</p> : null}
+            </section>
+          ) : null}
+
           {isAdmin && activePage === 'home' && runningAdminOrders.length > 0 ? (
             <motion.section
               className="panel home-live-orders"
@@ -1745,9 +2278,9 @@ function App() {
               <div className="admin-product-cards mini-top">
                 {runningAdminOrders.slice(0, 6).map((order) => {
                   const allowedTransitions = allowedAdminOrderTransitions(order.status);
-                  const selectableStatuses = [order.status, ...allowedTransitions];
-                  const isLocked = allowedTransitions.length === 0;
                   const isUpdating = adminOrderStatusUpdatingId === order.order_id;
+                  const preview = liveOrderPreviewById.get(order.order_id);
+                  const mockImage = pickDeterministicImage(liveOrderMockImagePool, order.order_id) || brandLogo;
                   return (
                     <article
                       className="admin-product-card clickable-card"
@@ -1756,36 +2289,88 @@ function App() {
                     >
                       <div className="admin-product-card-head">
                         <strong>{displayName(order.customer_name, 'Customer Order')}</strong>
-                        <div className="supply-card-top-actions">
-                          <span className={statusClass(order.status)}>{formatStatusText(order.status)}</span>
-                          <button
-                            type="button"
-                            className="ghost history-icon-btn"
-                            aria-label="Open order history"
-                            title="History"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void openOrder(order.order_id);
-                            }}
-                          >
-                            <AppIcon name="history" />
-                          </button>
+                        <span className={statusClass(order.status)}>{formatStatusText(order.status)}</span>
+                      </div>
+                      <div className="live-order-split">
+                        <div className="live-order-media">
+                          {preview && preview.previewProducts.length === 1 ? (
+                            <div className="live-order-single-image">
+                              <img
+                                src={(preview.previewProducts[0].image_url || '').trim() || mockImage}
+                                alt={productDisplayName(preview.previewProducts[0].name, 'Order item')}
+                                loading="lazy"
+                              />
+                            </div>
+                          ) : null}
+                          {preview && preview.previewProducts.length > 1 ? (
+                            <div className="live-order-flipbook">
+                              {preview.previewProducts.map((product, index) => (
+                                <figure
+                                  className="live-order-page"
+                                  key={`${order.order_id}-${product.id}`}
+                                  style={{
+                                    animationDelay: `${index * 2.2}s`,
+                                    animationDuration: `${Math.max(6, preview.previewProducts.length * 2.2)}s`,
+                                    zIndex: preview.previewProducts.length - index,
+                                  }}
+                                >
+                                  <img
+                                    src={(product.image_url || '').trim() || mockImage}
+                                    alt={productDisplayName(product.name, 'Order item')}
+                                    loading="lazy"
+                                  />
+                                </figure>
+                              ))}
+                              {preview.hiddenPreviewCount > 0 ? (
+                                <span className="live-order-thumb-more live-order-thumb-more-overlay">+{preview.hiddenPreviewCount}</span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {!preview || preview.previewProducts.length === 0 ? (
+                            <div className="live-order-single-image">
+                              <img src={mockImage} alt="Sample product" loading="lazy" />
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="live-order-details">
+                          <div className="live-order-items-table" aria-label="Order contents">
+                            {order.items.map((item, index) => {
+                              const parsedItem = parseOrderItemForTable(item);
+                              return (
+                                <div className="live-order-items-row" key={`${order.order_id}-item-${index}`}>
+                                  <span className="live-order-items-name">{parsedItem.name}</span>
+                                  <span className="live-order-items-qty">x{parsedItem.quantity ?? 1}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="row between live-order-summary-row">
+                            <strong>{money(order.total_amount)}</strong>
+                          </div>
                         </div>
                       </div>
-                      <p className="muted small">Placed {formatTime(order.created_at)}</p>
-                      <p className="muted admin-product-sub">{order.items.join(', ')}</p>
-                      <div className="row between">
-                        <strong>{money(order.total_amount)}</strong>
-                        <select
-                          value={order.status}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => void updateAdminOrder(order.order_id, e.target.value)}
-                          disabled={isLocked || isUpdating}
-                        >
-                          {selectableStatuses.map((status) => (
-                            <option key={`home-live-${order.order_id}-${status}`} value={status}>{formatStatusText(status)}</option>
-                          ))}
-                        </select>
+                      <div className="live-order-footer">
+                        <div className="live-order-status-actions">
+                          {allowedTransitions.length > 0 ? (
+                            allowedTransitions.map((nextStatus) => (
+                              <button
+                                key={`home-live-${order.order_id}-${nextStatus}`}
+                                type="button"
+                                className={`ghost live-order-status-btn live-order-status-btn-${nextStatus.replace(/_/g, '-')}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void updateAdminOrder(order.order_id, nextStatus);
+                                }}
+                                disabled={isUpdating}
+                                aria-label={`Set order ${order.order_id} status to ${formatStatusText(nextStatus)}`}
+                              >
+                                {formatStatusText(nextStatus)}
+                              </button>
+                            ))
+                          ) : (
+                            <span className="muted small">No status actions</span>
+                          )}
+                        </div>
                       </div>
                     </article>
                   );
@@ -1822,37 +2407,92 @@ function App() {
                 </div>
               </div>
               <div className="admin-product-cards mini-top">
-                {runningUserOrders.slice(0, 6).map((order) => (
-                  <article
-                    className="admin-product-card clickable-card"
-                    key={`user-home-live-${order.order_id}`}
-                    onClick={() => void openOrder(order.order_id)}
-                  >
-                    <div className="admin-product-card-head">
-                      <strong>{displayName(order.customer_name, session?.full_name || 'Customer')}</strong>
-                      <div className="supply-card-top-actions">
+                {runningUserOrders.slice(0, 6).map((order) => {
+                  const preview = liveOrderPreviewById.get(order.order_id);
+                  const mockImage = pickDeterministicImage(liveOrderMockImagePool, order.order_id) || brandLogo;
+                  return (
+                    <article
+                      className="admin-product-card clickable-card"
+                      key={`user-home-live-${order.order_id}`}
+                      onClick={() => void openOrder(order.order_id)}
+                    >
+                      <div className="admin-product-card-head">
+                        <strong>{displayName(order.customer_name, session?.full_name || 'Customer')}</strong>
                         <span className={statusClass(order.status)}>{formatStatusText(order.status)}</span>
+                      </div>
+                      <div className="live-order-split">
+                        <div className="live-order-media">
+                          {preview && preview.previewProducts.length === 1 ? (
+                            <div className="live-order-single-image">
+                              <img
+                                src={(preview.previewProducts[0].image_url || '').trim() || mockImage}
+                                alt={productDisplayName(preview.previewProducts[0].name, 'Order item')}
+                                loading="lazy"
+                              />
+                            </div>
+                          ) : null}
+                          {preview && preview.previewProducts.length > 1 ? (
+                            <div className="live-order-flipbook">
+                              {preview.previewProducts.map((product, index) => (
+                                <figure
+                                  className="live-order-page"
+                                  key={`${order.order_id}-${product.id}`}
+                                  style={{
+                                    animationDelay: `${index * 2.2}s`,
+                                    animationDuration: `${Math.max(6, preview.previewProducts.length * 2.2)}s`,
+                                    zIndex: preview.previewProducts.length - index,
+                                  }}
+                                >
+                                  <img
+                                    src={(product.image_url || '').trim() || mockImage}
+                                    alt={productDisplayName(product.name, 'Order item')}
+                                    loading="lazy"
+                                  />
+                                </figure>
+                              ))}
+                              {preview.hiddenPreviewCount > 0 ? (
+                                <span className="live-order-thumb-more live-order-thumb-more-overlay">+{preview.hiddenPreviewCount}</span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {!preview || preview.previewProducts.length === 0 ? (
+                            <div className="live-order-single-image">
+                              <img src={mockImage} alt="Sample product" loading="lazy" />
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="live-order-details">
+                          <div className="live-order-items-table" aria-label="Order contents">
+                            {order.items.map((item, index) => {
+                              const parsedItem = parseOrderItemForTable(item);
+                              return (
+                                <div className="live-order-items-row" key={`${order.order_id}-item-${index}`}>
+                                  <span className="live-order-items-name">{parsedItem.name}</span>
+                                  <span className="live-order-items-qty">x{parsedItem.quantity ?? 1}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="row between">
+                            <strong>{money(order.total_amount)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="live-order-footer">
                         <button
                           type="button"
-                          className="ghost history-icon-btn"
-                          aria-label="Open order history"
-                          title="History"
+                          className="ghost live-order-open-btn"
                           onClick={(e) => {
                             e.stopPropagation();
                             void openOrder(order.order_id);
                           }}
                         >
-                          <AppIcon name="history" />
+                          View Order
                         </button>
                       </div>
-                    </div>
-                    <p className="muted small">Placed {formatTime(order.created_at)}</p>
-                    <p className="muted admin-product-sub">{order.items.join(', ')}</p>
-                    <div className="row between">
-                      <strong>{money(order.total_amount)}</strong>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             </motion.section>
           ) : null}
@@ -1863,25 +2503,36 @@ function App() {
                 <h3>Deals Of The Day</h3>
                 <p className="muted small">{featuredDeals.length} active offers</p>
               </div>
-              <div className="deal-strip mini-top">
-                {featuredDeals.map((product) => {
-                  const offerPercent = Math.max(1, Math.round(((product.compare_at_price - product.price) / product.compare_at_price) * 100));
+              <div className="deal-strip deal-strip-single-row mini-top">
+                {featuredDealsPreview.map((product) => {
+                  const primaryVariant = primaryStorefrontVariant(product);
+                  const offerPercent = Math.max(1, Math.round(((primaryVariant.compare_at_price - primaryVariant.price) / primaryVariant.compare_at_price) * 100));
                   return (
-                    <article key={`deal-${product.id}`} className="deal-card clickable-card" onClick={() => setSelectedProductDetail(product)}>
+                    <article key={`deal-${product.id}`} className="deal-card clickable-card" onClick={() => openProductDetailsPage(product)}>
                       <div className="deal-image" style={{ background: productGradient(product) }}>
-                        {product.image_url ? <img src={product.image_url} alt={productDisplayName(product.name)} /> : <span>{productCategoryLabel(product.category)}</span>}
+                        {primaryVariant.image_url ? <img src={primaryVariant.image_url} alt={productDisplayName(product.name)} /> : <span>{productCategoryLabel(product.category)}</span>}
                       </div>
                       <div className="stack">
                         <strong>{productDisplayName(product.name)}</strong>
                         <p className="muted small">{productBrandLabel(product.brand, productCategoryLabel(product.category))}</p>
                         <div className="row between">
-                          <strong className="product-price">{money(product.price)}</strong>
+                          <strong className="product-price">{money(primaryVariant.price)}</strong>
                           <span className="status offer">{offerPercent}% OFF</span>
                         </div>
                       </div>
                     </article>
                   );
                 })}
+                {featuredDeals.length > DEALS_PREVIEW_LIMIT ? (
+                  <button
+                    type="button"
+                    className="deal-card deal-card-view-more"
+                    onClick={() => setPage('deals')}
+                  >
+                    <strong>View More</strong>
+                    <p className="muted small">See all {featuredDeals.length} deals</p>
+                  </button>
+                ) : null}
               </div>
             </section>
           ) : null}
@@ -1893,30 +2544,48 @@ function App() {
                 <p className="muted small">Highest rated and featured products</p>
               </div>
               <div className="picks-grid mini-top">
-                {popularPicks.slice(0, 6).map((product) => (
-                  <article key={`pick-${product.id}`} className="pick-card clickable-card" onClick={() => setSelectedProductDetail(product)}>
-                    <div className="pick-head">
-                      <span className="status review-star">★ {product.rating.toFixed(1)}</span>
-                      {product.stock_status ? <span className="muted small">{formatStatusText(product.stock_status)}</span> : null}
-                    </div>
-                    <h4>{productDisplayName(product.name)}</h4>
-                    <p className="muted small">{product.short_description?.trim() || product.description}</p>
-                    <div className="row between">
-                      <strong>{money(product.price)}</strong>
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={product.inventory <= 0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          addToCart(product);
-                        }}
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                {popularPicks.slice(0, 6).map((product) => {
+                  const primaryVariant = primaryStorefrontVariant(product);
+                  return (
+                    <article key={`pick-${product.id}`} className="pick-card clickable-card" onClick={() => openProductDetailsPage(product)}>
+
+                      {/* 🔹 ADD IMAGE HERE */}
+                      <div className="pick-image" style={{ background: productGradient(product) }}>
+                        {primaryVariant.image_url ? (
+                          <img src={primaryVariant.image_url} alt={productDisplayName(product.name)} />
+                        ) : (
+                          <span>{productCategoryLabel(product.category)}</span>
+                        )}
+                      </div>
+
+                      <div className="pick-head">
+                        <h4>{productDisplayName(product.name)}</h4>
+                        <span className="status review-star">★ {primaryVariant.rating.toFixed(1)}</span>
+                        
+                      </div>
+
+                      
+                      <p className="muted small">
+                        {primaryVariant.short_description?.trim() || primaryVariant.description}
+                      </p>
+
+                      <div className="row between">
+                        <strong>{money(primaryVariant.price)}</strong>
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={primaryVariant.inventory <= 0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            addToCart(primaryVariant);
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </section>
           ) : null}
@@ -1972,10 +2641,16 @@ function App() {
 
             <section className="filters mini-top">
               <input
+                list="catalog-product-suggestions"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search products, department, collection"
               />
+              <datalist id="catalog-product-suggestions">
+                {catalogSearchSuggestions.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
               <select value={category} onChange={(e) => chooseDepartment(e.target.value)}>
                 {categories.map((item) => (
                   <option key={item} value={item}>
@@ -1995,7 +2670,6 @@ function App() {
                 ))}
               </select>
             </section>
-
             {storefrontScreen === 'departments' ? (
               <section className="trust-grid mini-top">
                 {visibleDepartmentCards.map((item) => {
@@ -2028,6 +2702,62 @@ function App() {
 
             {storefrontScreen === 'products' ? (
               <section ref={productsSectionRef} className="product-grid mini-top">
+                {paginatedFilteredProducts.map((product, idx) => (
+                  (() => {
+                    const primaryVariant = primaryStorefrontVariant(product);
+                    const variants = productVariants(product);
+                    const hasVariants = variants.length > 1;
+                    return (
+                      <motion.article
+                        className="product-card clickable-card"
+                        key={product.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.35, delay: idx * 0.02 }}
+                        onClick={() => openProductDetailsPage(product)}
+                      >
+                        <div className="product-image" style={{ background: productGradient(product) }}>
+                          {primaryVariant.image_url ? (
+                            <img src={primaryVariant.image_url} alt={productDisplayName(product.name)} />
+                          ) : (
+                            <span>{productCategoryLabel(product.category)}</span>
+                          )}
+                        </div>
+                        <div className="product-body">
+                          <div className="product-card-head">
+                            <h3 className="product-title">{productDisplayName(product.name)}</h3>
+                            <span className="status review-star product-card-review">★ {primaryVariant.rating.toFixed(1)}</span>
+                          </div>
+                          <p className="muted product-description">
+                            {primaryVariant.short_description?.trim() || primaryVariant.description}
+                          </p>
+                          <div className="product-meta-row row between">
+                            <p className="muted small product-meta">
+                              {hasVariants ? `${variants.length} size options` : `${primaryVariant.unit_value} ${primaryVariant.unit}`}
+                              {primaryVariant.variant_label ? ` • ${primaryVariant.variant_label}` : ''}
+                            </p>
+                          </div>
+                          <div className="row between product-card-footer">
+                            <div className="product-price-block">
+                              <strong className="product-price">{money(primaryVariant.price)}</strong>
+                              <small className="line">{money(primaryVariant.compare_at_price)}</small>
+                            </div>
+                            <button
+                              className="primary"
+                              disabled={primaryVariant.inventory <= 0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                addToCart(primaryVariant);
+                              }}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      </motion.article>
+                    );
+                  })()
+                ))}
                 {filteredProducts.length > 0 ? (
                   <div className="catalog-pagination">
                     <p className="muted small">
@@ -2069,65 +2799,6 @@ function App() {
                     </div>
                   </div>
                 ) : null}
-                {paginatedFilteredProducts.map((product, idx) => (
-                  <motion.article
-                    className="product-card clickable-card"
-                    key={product.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.35, delay: idx * 0.02 }}
-                    onClick={() => setSelectedProductDetail(product)}
-                  >
-                    <div className="product-image" style={{ background: productGradient(product) }}>
-                      {product.image_url ? (
-                        <img src={product.image_url} alt={productDisplayName(product.name)} />
-                      ) : (
-                        <span>{productCategoryLabel(product.category)}</span>
-                      )}
-                    </div>
-                    <div className="product-body">
-                      <div className="product-card-head">
-                        <h3 className="product-title">{productDisplayName(product.name)}</h3>
-                        <div className="product-card-statuses">
-                          {product.compare_at_price > product.price ? (
-                            <span className="status offer product-card-offer-status">
-                              {Math.max(1, Math.round(((product.compare_at_price - product.price) / product.compare_at_price) * 100))}% OFF
-                            </span>
-                          ) : (
-                            <span className="status offer product-card-offer-status status-placeholder" aria-hidden="true">
-                              00% OFF
-                            </span>
-                          )}
-                          <span className={statusClass(product.inventory > 0 ? 'available' : 'sold')}>{product.inventory > 0 ? 'In stock' : 'Out'}</span>
-                        </div>
-                      </div>
-                      <p className="muted product-description">
-                        {product.short_description?.trim() || product.description}
-                      </p>
-                      <p className="muted small product-meta">
-                        {productBrandLabel(product.brand, '') ? `${productBrandLabel(product.brand, '')} • ` : ''}
-                        {product.unit_value} {product.unit} • {productCategoryLabel(product.category)}
-                        {productSubcategoryLabel(product.subcategory, '') ? ` • ${productSubcategoryLabel(product.subcategory, '')}` : ''}
-                      </p>
-                      <div className="row between">
-                        <div className="product-price-block">
-                          <strong className="product-price">{money(product.price)}</strong>
-                          <small className="line">{money(product.compare_at_price)}</small>
-                        </div>
-                        <button
-                          className="primary"
-                          disabled={product.inventory <= 0}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            addToCart(product);
-                          }}
-                        >
-                          Add
-                        </button>
-                      </div>
-                    </div>
-                  </motion.article>
-                ))}
                 {filteredProducts.length === 0 ? <div className="state-card">No products found for selected catalog filters.</div> : null}
               </section>
             ) : null}
@@ -2154,8 +2825,231 @@ function App() {
         <UserOrdersPage
           history={history}
           sessionFullName={session?.full_name}
+          orderPreviewById={liveOrderPreviewById}
           onOpenOrder={openOrder}
         />
+      ) : null}
+
+      {activePage === 'deals' ? (
+        <section className="panel product-detail-page">
+          <div className="row between product-detail-page-top">
+            <button type="button" className="ghost product-detail-back-btn" onClick={() => setPage('home')}>
+              <AppIcon name="back" className="icon-glyph" />
+              Back To Home
+            </button>
+            <span className="muted small">Deals Overview</span>
+          </div>
+          <div className="row between">
+            <div className="stack">
+              <p className="label">Deals Of The Day</p>
+              <h3>All Active Deals</h3>
+            </div>
+            <p className="muted small">{featuredDeals.length} active offers</p>
+          </div>
+          <div className="picks-grid mini-top">
+            {featuredDeals.map((product) => {
+              const primaryVariant = primaryStorefrontVariant(product);
+              const offerPercent = Math.max(1, Math.round(((primaryVariant.compare_at_price - primaryVariant.price) / primaryVariant.compare_at_price) * 100));
+              return (
+                <article key={`deal-page-${product.id}`} className="deal-card clickable-card" onClick={() => openProductDetailsPage(product)}>
+                  <div className="deal-image" style={{ background: productGradient(product) }}>
+                    {primaryVariant.image_url ? <img src={primaryVariant.image_url} alt={productDisplayName(product.name)} /> : <span>{productCategoryLabel(product.category)}</span>}
+                  </div>
+                  <div className="stack">
+                    <strong>{productDisplayName(product.name)}</strong>
+                    <p className="muted small">{primaryVariant.short_description?.trim() || primaryVariant.description}</p>
+                    <div className="row between">
+                      <strong className="product-price">{money(primaryVariant.price)}</strong>
+                      <span className="status offer">{offerPercent}% OFF</span>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          {featuredDeals.length === 0 ? <div className="state-card">No active deals available right now.</div> : null}
+        </section>
+      ) : null}
+
+      {activePage === 'product-details' ? (
+        selectedProductDetail && selectedStorefrontVariant ? (
+          <section className="panel product-detail-page">
+
+            <div className="product-detail-header">
+              <div className="row between product-detail-page-top">
+                <button type="button" className="ghost product-detail-back-btn" onClick={() => setPage('home')}>
+                  <AppIcon name="back" className="icon-glyph" />
+                </button>
+              </div>
+              <div className="product-detail-title-wrap">
+                <p className="label">Product Details</p>
+                <h3>{productDisplayName(selectedProductDetail.name)}</h3>
+                <p className="muted small product-detail-subtitle">
+                  {productBrandLabel(selectedStorefrontVariant.brand, 'Generic')}
+                </p>
+              </div>
+            </div>
+            <div className="product-detail-layout">
+              <div className="product-detail-image-column">
+                <div className="product-detail-image-wrap" style={{ background: productGradient(selectedStorefrontVariant) }}>
+                  {selectedStorefrontVariant.image_url ? (
+                    <img src={selectedStorefrontVariant.image_url} alt={productDisplayName(selectedProductDetail.name)} className="product-detail-image" />
+                  ) : (
+                    <span>{productCategoryLabel(selectedProductDetail.category)}</span>
+                  )}
+                </div>
+              </div>
+              <div className="stack product-detail-info">
+                <div className="product-detail-badges">
+                  {selectedProductDetailMeta?.hasDiscount ? (
+                    <span className="status offer">
+                      {selectedProductDetailMeta.discountPercent}% OFF
+                    </span>
+                  ) : null}
+                  {selectedProductDetailMeta?.dealBadge ? <span className="status">{selectedProductDetailMeta.dealBadge}</span> : null}
+                  <span className="status review-star">★ {selectedStorefrontVariant.rating.toFixed(1)}</span>
+                  <span className={statusClass(selectedStorefrontVariant.inventory > 0 ? 'available' : 'sold')}>
+                    {selectedStorefrontVariant.inventory > 0 ? 'In Stock' : 'Out Of Stock'}
+                  </span>
+                </div>
+                {productVariants(selectedProductDetail).length > 1 ? (
+                  <div className="product-detail-variant-picker">
+                    <div className="row between product-detail-variant-head">
+                      <h4>Choose Size</h4>
+                      <p className="muted small">{productVariants(selectedProductDetail).length} options</p>
+                    </div>
+                    <div className="product-detail-variant-grid">
+                      {productVariants(selectedProductDetail).map((variant) => (
+                        <button
+                          key={variant.id}
+                          type="button"
+                          className={`product-detail-variant-card ${selectedStorefrontVariant.id === variant.id ? 'product-detail-variant-card-active' : ''}`}
+                          onClick={() => setSelectedProductVariantId(variant.id)}
+                        >
+                          <strong>{variant.variant_label || `${variant.unit_value} ${variant.unit}`}</strong>
+                          <span>{money(variant.price)}</span>
+                          <small>{variant.inventory > 0 ? `${variant.inventory} left` : 'Out of stock'}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="product-detail-highlights">
+                  <article className="product-detail-highlight">
+                    <span>Unit Size</span>
+                    <strong>{selectedStorefrontVariant.variant_label || `${selectedStorefrontVariant.unit_value} ${selectedStorefrontVariant.unit}`}</strong>
+                  </article>
+                  <article className="product-detail-highlight">
+                    <span>Stock</span>
+                    <strong>{selectedStorefrontVariant.inventory} Units</strong>
+                  </article>
+                  <article className="product-detail-highlight">
+                    <span>Supplier</span>
+                    <strong>{selectedProductDetailMeta?.supplierName || 'Direct'}</strong>
+                  </article>
+                </div>
+                <p className="muted product-detail-description">
+                  {selectedProductDetailMeta?.description || selectedProductDetail.description}
+                </p>
+                <div className="product-detail-facts">
+                  <article className="product-detail-fact">
+                    <span>Brand</span>
+                    <strong>{productBrandLabel(selectedStorefrontVariant.brand, 'Generic')}</strong>
+                  </article>
+                  <article className="product-detail-fact">
+                    <span>Category</span>
+                    <strong>{selectedProductDetailMeta?.categoryPath || productCategoryLabel(selectedProductDetail.category)}</strong>
+                  </article>
+                  <article className="product-detail-fact">
+                    <span>Available Qty</span>
+                    <strong>{selectedStorefrontVariant.inventory}</strong>
+                  </article>
+                  <article className="product-detail-fact">
+                    <span>Tax</span>
+                    <strong>{selectedStorefrontVariant.tax_percent != null ? `GST ${selectedStorefrontVariant.tax_percent}%` : 'Included'}</strong>
+                  </article>
+                  <article className="product-detail-fact">
+                    <span>Stock Status</span>
+                    <strong>{selectedProductDetailMeta?.stockState || 'Available'}</strong>
+                  </article>
+                </div>
+                <div className="product-detail-price">
+                  <div className="product-detail-price-block">
+                    <strong className="product-price">{money(selectedStorefrontVariant.price)}</strong>
+                    {selectedProductDetailMeta?.hasDiscount ? (
+                      <>
+                        <small className="line">{money(selectedStorefrontVariant.compare_at_price)}</small>
+                        <p className="muted small">Save {money(selectedProductDetailMeta.saveAmount)}</p>
+                      </>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={selectedStorefrontVariant.inventory <= 0}
+                    onClick={() => addToCart(selectedStorefrontVariant)}
+                  >
+                    Add to Cart
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="stack mini-top">
+              <div className="row between">
+                <h4>Recommended Products</h4>
+                <p className="muted small">{recommendedProducts.length} matched products</p>
+              </div>
+              <div className="product-detail-recommended-grid">
+                {recommendedProducts.map((product) => (
+                  (() => {
+                    const primaryVariant = primaryStorefrontVariant(product);
+                    return (
+                      <article
+                        className="product-detail-recommended-card clickable-card"
+                        key={`recommended-${product.id}`}
+                        onClick={() => openProductDetailsPage(product)}
+                      >
+                        <div className="product-detail-recommended-image" style={{ background: productGradient(product) }}>
+                          {primaryVariant.image_url ? (
+                            <img src={primaryVariant.image_url} alt={productDisplayName(product.name)} />
+                          ) : (
+                            <span>{productCategoryLabel(product.category)}</span>
+                          )}
+                        </div>
+                        <div className="stack">
+                          <strong>{productDisplayName(product.name)}</strong>
+                          <p className="muted small">
+                            {productBrandLabel(product.brand, '') ? `${productBrandLabel(product.brand, '')} • ` : ''}
+                            {productCategoryLabel(product.category)}
+                          </p>
+                          <div className="row between">
+                            <strong>{money(primaryVariant.price)}</strong>
+                            <button
+                              type="button"
+                              className="ghost"
+                              disabled={primaryVariant.inventory <= 0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                addToCart(primaryVariant);
+                              }}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })()
+                ))}
+              </div>
+              {recommendedProducts.length === 0 ? <div className="state-card">No related products available right now.</div> : null}
+            </div>
+          </section>
+        ) : (
+          <section className="panel">
+            <div className="state-card">Product details not available. Please open a product from the catalog.</div>
+          </section>
+        )
       ) : null}
 
       {isAdmin && activePage === 'admin-orders' ? (
@@ -2170,6 +3064,7 @@ function App() {
           adminOrderStatusUpdatingId={adminOrderStatusUpdatingId}
           setAdminOrdersSearch={setAdminOrdersSearch}
           setAdminOrdersStatusFilter={setAdminOrdersStatusFilter}
+          orderPreviewById={liveOrderPreviewById}
           onOpenOrder={openOrder}
           onUpdateAdminOrder={updateAdminOrder}
         />
@@ -2356,9 +3251,8 @@ function App() {
                     <div className="admin-product-card-head">
                       <strong>{productDisplayName(p.name)}</strong>
                       <span
-                        className={`stock-pill ${
-                          p.inventory <= 0 ? 'stock-pill-out' : p.inventory <= LOW_STOCK_THRESHOLD ? 'stock-pill-low' : 'stock-pill-ok'
-                        }`}
+                        className={`stock-pill ${p.inventory <= 0 ? 'stock-pill-out' : p.inventory <= LOW_STOCK_THRESHOLD ? 'stock-pill-low' : 'stock-pill-ok'
+                          }`}
                       >
                         {p.inventory <= 0 ? 'Out' : `Stock ${p.inventory}`}
                       </span>
@@ -2599,55 +3493,54 @@ function App() {
                     const isLocked = allowedTransitions.length === 0;
                     const isUpdating = adminSupplyStatusUpdatingId === order.supply_order_id;
                     return (
-                  <article
-                    className={`admin-product-card supply-request-card clickable-card ${
-                      order.status === 'rejected'
-                        ? 'stock-out'
-                        : order.status === 'pending'
-                          ? 'stock-low'
-                          : 'stock-ok'
-                    }`}
-                    key={order.supply_order_id}
-                    onClick={() => setSelectedSupplyHistory(order)}
-                  >
-                    <div className="admin-product-card-head">
-                      <div className="icon-title">
-                        <span className="entity-icon" aria-hidden="true"><AppIcon name="package" /></span>
-                        <strong>{order.title}</strong>
-                      </div>
-                      <div className="supply-card-top-actions">
-                        <span className={statusClass(order.status)}>{formatStatusText(order.status)}</span>
-                        <button
-                          type="button"
-                          className="ghost history-icon-btn"
-                          aria-label="Open request history"
-                          title="History"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedSupplyHistory(order);
-                          }}
+                      <article
+                        className={`admin-product-card supply-request-card clickable-card ${order.status === 'rejected'
+                            ? 'stock-out'
+                            : order.status === 'pending'
+                              ? 'stock-low'
+                              : 'stock-ok'
+                          }`}
+                        key={order.supply_order_id}
+                        onClick={() => setSelectedSupplyHistory(order)}
+                      >
+                        <div className="admin-product-card-head">
+                          <div className="icon-title">
+                            <span className="entity-icon" aria-hidden="true"><AppIcon name="package" /></span>
+                            <strong>{order.title}</strong>
+                          </div>
+                          <div className="supply-card-top-actions">
+                            <span className={statusClass(order.status)}>{formatStatusText(order.status)}</span>
+                            <button
+                              type="button"
+                              className="ghost history-icon-btn"
+                              aria-label="Open request history"
+                              title="History"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedSupplyHistory(order);
+                              }}
+                            >
+                              <AppIcon name="history" />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="muted admin-product-sub">{order.supplier_name}</p>
+                        <p className="muted small">{order.notes || 'No notes provided'}</p>
+                        <p className="muted small">Qty {order.quantity} • {formatTime(order.created_at)}</p>
+                        <select
+                          value={order.status}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => void updateAdminSupplyStatus(order.supply_order_id, e.target.value)}
+                          disabled={isLocked || isUpdating}
                         >
-                          <AppIcon name="history" />
-                        </button>
-                      </div>
-                    </div>
-                    <p className="muted admin-product-sub">{order.supplier_name}</p>
-                    <p className="muted small">{order.notes || 'No notes provided'}</p>
-                    <p className="muted small">Qty {order.quantity} • {formatTime(order.created_at)}</p>
-                    <select
-                      value={order.status}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => void updateAdminSupplyStatus(order.supply_order_id, e.target.value)}
-                      disabled={isLocked || isUpdating}
-                    >
-                      {selectableStatuses.map((status) => (
-                        <option key={`${order.supply_order_id}-${status}`} value={status}>{formatStatusText(status)}</option>
-                      ))}
-                    </select>
-                    <div className="row between">
-                      <span className="muted small">{isUpdating ? 'Updating status...' : ''}</span>
-                    </div>
-                  </article>
+                          {selectableStatuses.map((status) => (
+                            <option key={`${order.supply_order_id}-${status}`} value={status}>{formatStatusText(status)}</option>
+                          ))}
+                        </select>
+                        <div className="row between">
+                          <span className="muted small">{isUpdating ? 'Updating status...' : ''}</span>
+                        </div>
+                      </article>
                     );
                   })()
                 ))}
@@ -3198,98 +4091,6 @@ function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {selectedProductDetail ? (
-          <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedProductDetail(null)}>
-            <motion.div
-              className="dialog dialog-fullscreen product-detail-dialog"
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 12, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="product-detail-header">
-                <div className="product-detail-title-wrap">
-                  <p className="label">Product Details</p>
-                  <h3>{productDisplayName(selectedProductDetail.name)}</h3>
-                  <p className="muted small product-detail-subtitle">
-                    {productBrandLabel(selectedProductDetail.brand, 'Generic')}
-                    {' • '}
-                    {productCategoryLabel(selectedProductDetail.category)}
-                    {productSubcategoryLabel(selectedProductDetail.subcategory, '') ? ` / ${productSubcategoryLabel(selectedProductDetail.subcategory, '')}` : ''}
-                  </p>
-                </div>
-                <button type="button" className="ghost close-icon-btn" aria-label="Close product details" onClick={() => setSelectedProductDetail(null)}>
-                  <AppIcon name="x" />
-                </button>
-              </div>
-              <div className="product-detail-layout">
-                <div className="product-detail-image-wrap" style={{ background: productGradient(selectedProductDetail) }}>
-                  {selectedProductDetail.image_url ? (
-                    <img src={selectedProductDetail.image_url} alt={productDisplayName(selectedProductDetail.name)} className="product-detail-image" />
-                  ) : (
-                    <span>{productCategoryLabel(selectedProductDetail.category)}</span>
-                  )}
-                </div>
-                <div className="stack product-detail-info">
-                  <div className="product-detail-badges">
-                    {selectedProductDetail.compare_at_price > selectedProductDetail.price ? (
-                      <span className="status offer">
-                        {Math.max(1, Math.round(((selectedProductDetail.compare_at_price - selectedProductDetail.price) / selectedProductDetail.compare_at_price) * 100))}% OFF
-                      </span>
-                    ) : null}
-                    <span className="status review-star">★ {selectedProductDetail.rating.toFixed(1)}</span>
-                    <span className={statusClass(selectedProductDetail.inventory > 0 ? 'available' : 'sold')}>
-                      {selectedProductDetail.inventory > 0 ? 'In Stock' : 'Out Of Stock'}
-                    </span>
-                  </div>
-                  <p className="muted product-detail-description">
-                    {selectedProductDetail.short_description?.trim() || selectedProductDetail.description}
-                  </p>
-                  <div className="product-detail-facts">
-                    <article className="product-detail-fact">
-                      <span>Brand</span>
-                      <strong>{productBrandLabel(selectedProductDetail.brand, 'Generic')}</strong>
-                    </article>
-                    <article className="product-detail-fact">
-                      <span>Unit Size</span>
-                      <strong>{selectedProductDetail.unit_value} {selectedProductDetail.unit}</strong>
-                    </article>
-                    <article className="product-detail-fact">
-                      <span>Available Qty</span>
-                      <strong>{selectedProductDetail.inventory}</strong>
-                    </article>
-                    <article className="product-detail-fact">
-                      <span>Tax</span>
-                      <strong>{selectedProductDetail.tax_percent != null ? `GST ${selectedProductDetail.tax_percent}%` : 'Included'}</strong>
-                    </article>
-                  </div>
-                  <div className="product-detail-price">
-                    <div className="product-detail-price-block">
-                      <strong className="product-price">{money(selectedProductDetail.price)}</strong>
-                      {selectedProductDetail.compare_at_price > selectedProductDetail.price ? (
-                        <>
-                          <small className="line">{money(selectedProductDetail.compare_at_price)}</small>
-                          <p className="muted small">Save {money(selectedProductDetail.compare_at_price - selectedProductDetail.price)}</p>
-                        </>
-                      ) : null}
-                    </div>
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={selectedProductDetail.inventory <= 0}
-                      onClick={() => addToCart(selectedProductDetail)}
-                    >
-                      Add to Cart
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-
-      <AnimatePresence>
         {selectedSupplierDetail ? (
           <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             <motion.div className="dialog" initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 12, opacity: 0 }}>
@@ -3363,9 +4164,8 @@ function App() {
                         <span className={`timeline-line ${index === 0 ? 'hidden' : ''} ${step.isDone ? 'active' : ''}`} />
                         <span className="timeline-dot" />
                         <span
-                          className={`timeline-line ${index === allSteps.length - 1 ? 'hidden' : ''} ${
-                            index < allSteps.length - 1 && step.isDone ? 'active' : ''
-                          }`}
+                          className={`timeline-line ${index === allSteps.length - 1 ? 'hidden' : ''} ${index < allSteps.length - 1 && step.isDone ? 'active' : ''
+                            }`}
                         />
                       </div>
                       <div className="timeline-content">
@@ -3529,9 +4329,8 @@ function App() {
                     <div className="admin-product-card-head">
                       <strong>{productDisplayName(p.name)}</strong>
                       <span
-                        className={`stock-pill ${
-                          p.inventory <= 0 ? 'stock-pill-out' : p.inventory <= LOW_STOCK_THRESHOLD ? 'stock-pill-low' : 'stock-pill-ok'
-                        }`}
+                        className={`stock-pill ${p.inventory <= 0 ? 'stock-pill-out' : p.inventory <= LOW_STOCK_THRESHOLD ? 'stock-pill-low' : 'stock-pill-ok'
+                          }`}
                       >
                         {p.inventory <= 0 ? 'Out' : `Stock ${p.inventory}`}
                       </span>
@@ -3613,13 +4412,12 @@ function App() {
                 <div className="admin-product-cards">
                   {supplierOrders.map((order) => (
                     <article
-                      className={`admin-product-card supply-request-card clickable-card ${
-                        order.status === 'rejected'
+                      className={`admin-product-card supply-request-card clickable-card ${order.status === 'rejected'
                           ? 'stock-out'
                           : order.status === 'pending'
                             ? 'stock-low'
                             : 'stock-ok'
-                      }`}
+                        }`}
                       key={order.supply_order_id}
                       onClick={() => setSelectedSupplyHistory(order)}
                     >
@@ -3696,6 +4494,9 @@ function App() {
                         <strong>{displayName(order.customer_name, session?.full_name || 'Customer')}</strong>
                         <span className={statusClass(order.status)}>{formatStatusText(order.status)}</span>
                       </div>
+                      <p className="muted small">
+                        Address: {order.customer_address?.trim() ? order.customer_address : 'Not available'}
+                      </p>
                       <p className="muted admin-product-sub">{order.items.join(', ')}</p>
                       <p className="muted small">Placed {formatTime(order.created_at)}</p>
                       <div className="row between">
@@ -3973,40 +4774,75 @@ function App() {
                   <AppIcon name="x" />
                 </button>
               </div>
-              <p className="muted">Placed at {formatTime(selectedOrder.created_at)}</p>
-              <p className="muted">User: {isAdmin ? displayName(selectedOrder.customer_name, 'Customer') : displayName(session?.full_name, 'Customer')}</p>
+              <div className="order-history-top-row">
+                <div className="order-history-user-info">
+                  <p className="muted"><strong>User:</strong> {isAdmin ? displayName(selectedOrder.customer_name, 'Customer') : displayName(session?.full_name, 'Customer')}</p>
+                  <p className="muted"><strong>Address:</strong> {selectedOrder.customer_address?.trim() ? selectedOrder.customer_address : 'Not available'}</p>
+                  <p className="muted"><strong>Phone:</strong> {selectedOrder.customer_phone?.trim() ? selectedOrder.customer_phone : 'Not available'}</p>
+                  <p className="muted"><strong>Email:</strong> {selectedOrderEmail}</p>
+                </div>
+                <div className="order-history-status-side">
+                  <span className={statusClass(selectedOrder.status)}>{formatStatusText(selectedOrder.status)}</span>
+                  <p className="muted small">Placed at {formatTime(selectedOrder.created_at)}</p>
+                </div>
+              </div>
               <div className="stack mini-top">
                 <h4>Timeline</h4>
-                <div className="timeline-list">
-                  {buildOrderTimelineSteps(selectedOrder).map((step, index, allSteps) => (
+                <div className="order-timeline-horizontal" style={selectedOrderTimelineStyle}>
+                  {selectedOrderTimeline.map((step, index) => (
                     <div
-                      className={`timeline-item tone-${step.tone} ${step.isDone ? 'is-done' : ''} ${step.isCurrent ? 'is-current' : ''}`}
+                      className={`order-timeline-step tone-${step.tone} status-${step.status.replace(/_/g, '-')} ${step.isDone ? 'is-done' : ''} ${step.isCurrent ? 'is-current' : ''}`}
                       key={`order-timeline-${step.status}-${index}`}
                     >
-                      <div className="timeline-track">
-                        <span className={`timeline-line ${index === 0 ? 'hidden' : ''} ${step.isDone ? 'active' : ''}`} />
-                        <span className="timeline-dot" />
-                        <span
-                          className={`timeline-line ${index === allSteps.length - 1 ? 'hidden' : ''} ${
-                            index < allSteps.length - 1 && step.isDone ? 'active' : ''
-                          }`}
-                        />
-                      </div>
-                      <div className="timeline-content">
-                        <strong>{formatStatusText(step.status)}</strong>
-                        <p className="muted">{step.timestamp ? formatTime(step.timestamp) : '--'}</p>
-                      </div>
+                      <span className="order-timeline-icon-wrap">
+                        <AppIcon name={step.icon} />
+                      </span>
+                      <strong className="order-timeline-title">{formatStatusText(step.status)}</strong>
+                      <p className="muted order-timeline-time">{step.timestamp ? formatTime(step.timestamp) : '--'}</p>
                     </div>
                   ))}
                 </div>
               </div>
               <div className="stack mini-top order-history-items-scroll">
-                {selectedOrder.items.map((item, i) => (
-                  <div className="tile" key={`${item.product_name}-${i}`}>
-                    <span>{item.product_name}</span>
-                    <strong>{item.quantity} x {money(item.unit_price)}</strong>
-                  </div>
+                {selectedOrderItemDetails.map((item, i) => (
+                  <article className="order-history-item-card" key={`${item.productName}-${i}`}>
+                    <div className="order-history-item-image-wrap">
+                      <img className="order-history-item-image" src={item.imageUrl} alt={productDisplayName(item.productName, 'Product')} loading="lazy" />
+                    </div>
+                    <div className="order-history-item-meta">
+                      <strong>{productDisplayName(item.productName, 'Product')}</strong>
+                      <div className="order-history-item-facts">
+                        <span>Qty: {item.quantity}</span>
+                        <span>Unit: {money(item.unitPrice)}</span>
+                        <span>Line Total: {money(item.lineTotal)}</span>
+                        <span>Discount: {item.discountPercent.toFixed(0)}%</span>
+                        <span>GST: {item.taxPercent.toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  </article>
                 ))}
+              </div>
+              <div className="order-checkout-summary mini-top">
+                <div className="order-checkout-summary-row">
+                  <span>Subtotal</span>
+                  <strong>{money(selectedOrderCheckoutSummary.subtotal)}</strong>
+                </div>
+                <div className="order-checkout-summary-row">
+                  <span>Discount</span>
+                  <strong>{money(selectedOrderCheckoutSummary.discount)}</strong>
+                </div>
+                <div className="order-checkout-summary-row">
+                  <span>Tax</span>
+                  <strong>{money(selectedOrderCheckoutSummary.tax)}</strong>
+                </div>
+                <div className="order-checkout-summary-row">
+                  <span>GST</span>
+                  <strong>{money(selectedOrderCheckoutSummary.gst)}</strong>
+                </div>
+                <div className="order-checkout-summary-row total">
+                  <span>Total Amount</span>
+                  <strong>{money(selectedOrderCheckoutSummary.total)}</strong>
+                </div>
               </div>
               <div className="row between mini-top">
                 <span className={statusClass(selectedOrder.status)}>{formatStatusText(selectedOrder.status)}</span>
@@ -4188,11 +5024,36 @@ function App() {
                     </button>
                   </div>
                   <div className="profile-panel-head">
-                    <div className="avatar">{(session.full_name || session.role).slice(0, 1).toUpperCase()}</div>
+                    <div className="avatar-wrap">
+                      <div className="avatar">
+                        {profilePhotoDataUrl ? (
+                          <img src={profilePhotoDataUrl} alt="Profile" className="avatar-photo" />
+                        ) : (
+                          (session.full_name || session.role).slice(0, 1).toUpperCase()
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="avatar-add-btn"
+                        aria-label={profilePhotoDataUrl ? 'Change profile photo' : 'Add profile photo'}
+                        onClick={() => profilePhotoInputRef.current?.click()}
+                      >
+                        +
+                      </button>
+                    </div>
                     <div>
                       <h4>{session.full_name || 'Account User'}</h4>
                       <p className="muted">{session.email || 'No email available'}</p>
                       <p className="muted">{session.phone || 'No phone available'}</p>
+                      <div className="profile-photo-actions">
+                        <input
+                          ref={profilePhotoInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden-file-input"
+                          onChange={onSelectProfilePhoto}
+                        />
+                      </div>
                     </div>
                   </div>
 

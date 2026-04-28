@@ -1,5 +1,7 @@
 export type AppPage =
   | 'home'
+  | 'deals'
+  | 'product-details'
   | 'user-orders'
   | 'admin-orders'
   | 'admin-products'
@@ -11,6 +13,8 @@ export type AppPage =
 export const STORAGE_SESSION = 'react_shop_session';
 export const STORAGE_CART = 'react_shop_cart';
 export const STORAGE_UI_SETTINGS = 'react_shop_ui_settings';
+export const STORAGE_DELIVERY_LOCATION = 'react_shop_delivery_location';
+export const STORAGE_PROFILE_PHOTO = 'react_shop_profile_photo';
 export const STORAGE_SHOP_CACHE = 'react_shop_catalog_shop_cache';
 export const STORAGE_PRODUCTS_CACHE = 'react_shop_catalog_products_cache';
 

@@ -40,6 +40,12 @@ export interface Product {
   deal_badge?: string | null;
   supplier_user_id?: string | null;
   supplier_name?: string | null;
+  base_name?: string | null;
+  variant_group?: string | null;
+  variant_label?: string | null;
+  variant_count?: number | null;
+  is_variant?: boolean;
+  variants?: Product[];
 }
 
 export interface Session {
