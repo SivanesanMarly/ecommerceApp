@@ -4,6 +4,7 @@ import './index.css';
 import { api, getApiError } from './api';
 import { AppIcon } from './components/common/AppIcon';
 import type { AppIconName } from './components/common/AppIcon';
+import { AdminBillingPage } from './pages/admin/AdminBillingPage';
 import { AdminCatalogPage } from './pages/admin/AdminCatalogPage';
 import { AdminOrdersPage } from './pages/admin/AdminOrdersPage';
 import { UserOrdersPage } from './pages/user/UserOrdersPage';
@@ -31,6 +32,8 @@ import type {
   NotificationPayload,
   OrderDetail,
   OrderHistoryItem,
+  PosSaleDetail,
+  PosSaleSummary,
   Product,
   Session,
   Shop,
@@ -166,14 +169,17 @@ function App() {
   const [authError, setAuthError] = useState('');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const googleSignInMountRef = useRef<HTMLDivElement | null>(null);
+  const adminExcelImportInputRef = useRef<HTMLInputElement | null>(null);
 
   const [history, setHistory] = useState<OrderHistoryItem[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<OrderDetail | null>(null);
   const [selectedProductDetail, setSelectedProductDetail] = useState<Product | null>(null);
   const [selectedProductVariantId, setSelectedProductVariantId] = useState<string | null>(null);
   const [selectedSupplierDetail, setSelectedSupplierDetail] = useState<Supplier | null>(null);
+  const [selectedAdminSale, setSelectedAdminSale] = useState<PosSaleDetail | null>(null);
 
   const [adminOrders, setAdminOrders] = useState<OrderHistoryItem[]>([]);
+  const [adminPosSales, setAdminPosSales] = useState<PosSaleSummary[]>([]);
   const [adminSupplyOrders, setAdminSupplyOrders] = useState<SupplyOrder[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierProducts, setSupplierProducts] = useState<Product[]>([]);
@@ -188,6 +194,8 @@ function App() {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState('');
   const [toast, setToast] = useState('');
+  const [adminExcelToolsOpen, setAdminExcelToolsOpen] = useState(false);
+  const [adminCatalogExportBusy, setAdminCatalogExportBusy] = useState(false);
 
   const [adminProductForm, setAdminProductForm] = useState(emptyAdminProductForm);
   const [adminProductBusy, setAdminProductBusy] = useState(false);
@@ -1083,12 +1091,14 @@ function App() {
       setNotice(notification);
 
       if (active.role === 'admin') {
-        const [orders, supply, flatProducts] = await Promise.all([
+        const [orders, posSales, supply, flatProducts] = await Promise.all([
           api.getAdminOrders(active.token),
+          api.getAdminPosSales(active.token),
           api.getAdminSupplyOrders(active.token),
           api.getProducts(),
         ]);
         setAdminOrders(orders);
+        setAdminPosSales(posSales);
         setAdminSupplyOrders(supply);
         setProducts(flatProducts);
       }
@@ -1133,13 +1143,15 @@ function App() {
 
     if (active.role === 'admin') {
       try {
-        const [orders, supply, supplierList, flatProducts] = await Promise.all([
+        const [orders, posSales, supply, supplierList, flatProducts] = await Promise.all([
           api.getAdminOrders(active.token),
+          api.getAdminPosSales(active.token),
           api.getAdminSupplyOrders(active.token),
           api.getSuppliers(active.token),
           api.getProducts(),
         ]);
         setAdminOrders(orders);
+        setAdminPosSales(posSales);
         setAdminSupplyOrders(supply);
         setSuppliers(supplierList);
         setProducts(flatProducts);
@@ -1191,11 +1203,13 @@ function App() {
     setSession(null);
     setHistory([]);
     setAdminOrders([]);
+    setAdminPosSales([]);
     setAdminSupplyOrders([]);
     setSupplierOrders([]);
     setSupplierOwnProducts([]);
     setNotice({ unread_count: 0, items: [] });
     setSelectedOrder(null);
+    setSelectedAdminSale(null);
     setProfileOpen(false);
     setSettingsOpen(false);
     setLogoutConfirmOpen(false);
@@ -1570,6 +1584,87 @@ function App() {
     }
   }
 
+  async function handleQuickCatalogImport(file: File) {
+    if (!session?.token || !isAdmin) return;
+    setCatalogImportBusy(true);
+    setCatalogImportResult(null);
+    try {
+      const result = await api.importAdminCatalogExcel(session.token, {
+        file,
+        source_label: catalogImportForm.source_label.trim() || undefined,
+        sheet_name: catalogImportForm.sheet_name.trim() || undefined,
+        assign_supplier_strategy: catalogImportForm.assign_supplier_strategy,
+        sync_missing: catalogImportForm.sync_missing,
+        only_active: catalogImportForm.only_active,
+        dry_run: false,
+      });
+      setCatalogImportForm((prev) => ({ ...prev, file, dry_run: false }));
+      setCatalogImportResult(result);
+      await bootstrap();
+      await loadRoleData(session);
+      setAdminExcelToolsOpen(false);
+      setToast(`Catalog import complete. Create: ${result.created}, Update: ${result.updated}`);
+    } catch (e) {
+      setToast(getApiError(e));
+    } finally {
+      setCatalogImportBusy(false);
+    }
+  }
+
+  async function handleAdminCatalogExport() {
+    if (!session?.token || !isAdmin) return;
+    setAdminCatalogExportBusy(true);
+    try {
+      const { blob, filename } = await api.exportAdminCatalogExcel(session.token);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setAdminExcelToolsOpen(false);
+      setToast(`Excel export downloaded: ${filename}`);
+    } catch (e) {
+      setToast(getApiError(e));
+    } finally {
+      setAdminCatalogExportBusy(false);
+    }
+  }
+
+  function handleAdminExcelImportSelection(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) return;
+    void handleQuickCatalogImport(file);
+  }
+
+  async function openAdminSaleReceipt(saleId: string) {
+    if (!session?.token || !isAdmin) return;
+    try {
+      const sale = await api.getAdminPosSaleDetail(session.token, saleId);
+      setSelectedAdminSale(sale);
+    } catch (e) {
+      setToast(getApiError(e));
+    }
+  }
+
+  async function refreshAdminBillingData() {
+    if (!session?.token || !isAdmin) return;
+    const [flatProducts, posSales] = await Promise.all([
+      api.getProducts(),
+      api.getAdminPosSales(session.token),
+    ]);
+    setProducts(flatProducts);
+    setAdminPosSales(posSales);
+  }
+
+  async function handleAdminSaleCreated(sale: PosSaleDetail) {
+    setSelectedAdminSale(sale);
+    await refreshAdminBillingData();
+  }
+
   function resetAdminProductEditor() {
     setAdminProductForm(emptyAdminProductForm());
     setEditingAdminProductId(null);
@@ -1583,6 +1678,7 @@ function App() {
       name: product.name,
       description: product.description,
       short_description: product.short_description || '',
+      barcode: product.barcode || '',
       category: product.category,
       subcategory: product.subcategory || '',
       brand: product.brand || '',
@@ -1658,6 +1754,7 @@ function App() {
       name: adminProductForm.name.trim(),
       description: adminProductForm.description.trim(),
       short_description: adminProductForm.short_description.trim(),
+      barcode: adminProductForm.barcode.trim(),
       category: adminProductForm.category.trim(),
       subcategory: adminProductForm.subcategory.trim(),
       brand: adminProductForm.brand.trim(),
@@ -3070,6 +3167,19 @@ function App() {
         />
       ) : null}
 
+      {isAdmin && activePage === 'admin-billing' && session?.token ? (
+        <AdminBillingPage
+          token={session.token}
+          products={products}
+          sales={adminPosSales}
+          selectedSale={selectedAdminSale}
+          onSaleCreated={handleAdminSaleCreated}
+          onOpenSale={openAdminSaleReceipt}
+          onCloseSale={() => setSelectedAdminSale(null)}
+          onToast={setToast}
+        />
+      ) : null}
+
       {isAdmin && activePage === 'admin-products' ? (
         <motion.section
           className="admin-grid admin-page-full"
@@ -3592,6 +3702,14 @@ function App() {
                     placeholder="Short Description"
                     value={adminProductForm.short_description}
                     onChange={(e) => setAdminProductForm((p) => ({ ...p, short_description: e.target.value }))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label">Barcode</label>
+                  <input
+                    placeholder="Barcode (scan code or type)"
+                    value={adminProductForm.barcode}
+                    onChange={(e) => setAdminProductForm((p) => ({ ...p, barcode: e.target.value }))}
                   />
                 </div>
                 <div className="field">
@@ -4753,6 +4871,7 @@ function App() {
                   <div className="row">
                     <button type="button" className="ghost" onClick={() => { setPage('home'); setSettingsOpen(false); }}>Home</button>
                     <button type="button" className="ghost" onClick={() => { setPage('admin-orders'); setSettingsOpen(false); }}>Orders</button>
+                    <button type="button" className="ghost" onClick={() => { setPage('admin-billing'); setSettingsOpen(false); }}>Billing</button>
                     <button type="button" className="ghost" onClick={() => { setPage('admin-products'); setSettingsOpen(false); }}>Products</button>
                     <button type="button" className="ghost" onClick={() => { setPage('admin-catalog'); setSettingsOpen(false); }}>Catalog</button>
                     <button type="button" className="ghost" onClick={() => { setPage('admin-suppliers'); setSettingsOpen(false); }}>Suppliers</button>
@@ -5308,6 +5427,66 @@ function App() {
         ) : null}
       </AnimatePresence>
 
+      <input
+        ref={adminExcelImportInputRef}
+        type="file"
+        accept=".xlsx,.xlsm"
+        onChange={handleAdminExcelImportSelection}
+        hidden
+      />
+
+      <AnimatePresence>
+        {isAdmin && adminExcelToolsOpen ? (
+          <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div className="dialog" initial={{ y: 24, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 20, opacity: 0 }}>
+              <div className="row between">
+                <div>
+                  <h3>Excel Tools</h3>
+                  <p className="muted">Import a new catalog spreadsheet or export the current catalog to Excel.</p>
+                </div>
+                <button
+                  type="button"
+                  className="ghost close-icon-btn"
+                  aria-label="Close Excel tools"
+                  onClick={() => setAdminExcelToolsOpen(false)}
+                >
+                  <AppIcon name="x" />
+                </button>
+              </div>
+              <div className="mini-top stack">
+                <button
+                  type="button"
+                  className="primary full"
+                  disabled={catalogImportBusy}
+                  onClick={() => adminExcelImportInputRef.current?.click()}
+                >
+                  {catalogImportBusy ? 'Importing Excel...' : 'Import Excel'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost full"
+                  disabled={adminCatalogExportBusy}
+                  onClick={() => void handleAdminCatalogExport()}
+                >
+                  {adminCatalogExportBusy ? 'Exporting Excel...' : 'Export Excel'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost full"
+                  onClick={() => {
+                    setPage('admin-catalog');
+                    setAdminExcelToolsOpen(false);
+                  }}
+                >
+                  Open Advanced Catalog Options
+                </button>
+                <p className="muted small">Quick import runs a real sync with the current catalog defaults.</p>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
       {isAdmin ? (
         <nav className="admin-bottom-nav" aria-label="Admin Bottom Navigation">
           <button
@@ -5325,6 +5504,13 @@ function App() {
             <small>Orders</small>
           </button>
           <button
+            className={`admin-nav-btn ${activePage === 'admin-billing' ? 'admin-nav-active' : ''}`}
+            onClick={() => setPage('admin-billing')}
+          >
+            <span><AppIcon name="receipt" /></span>
+            <small>Billing</small>
+          </button>
+          <button
             className={`admin-nav-btn ${activePage === 'admin-products' ? 'admin-nav-active' : ''}`}
             onClick={() => setPage('admin-products')}
           >
@@ -5337,6 +5523,13 @@ function App() {
           >
             <span><AppIcon name="factory" /></span>
             <small>Suppliers</small>
+          </button>
+          <button
+            className={`admin-nav-btn ${adminExcelToolsOpen ? 'admin-nav-active' : ''}`}
+            onClick={() => setAdminExcelToolsOpen(true)}
+          >
+            <span><AppIcon name="receipt" /></span>
+            <small>Excel</small>
           </button>
         </nav>
       ) : isSupplier ? (

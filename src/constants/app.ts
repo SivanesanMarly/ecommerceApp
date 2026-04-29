@@ -5,6 +5,7 @@ export type AppPage =
   | 'user-orders'
   | 'admin-orders'
   | 'admin-products'
+  | 'admin-billing'
   | 'admin-catalog'
   | 'admin-suppliers'
   | 'supplier-products'

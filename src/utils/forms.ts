@@ -3,6 +3,7 @@ export function emptyAdminProductForm() {
     name: '',
     description: '',
     short_description: '',
+    barcode: '',
     category: 'Vegetables',
     subcategory: '',
     brand: '',

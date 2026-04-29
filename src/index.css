@@ -727,7 +727,8 @@ button {
 }
 
 input,
-select {
+select,
+textarea {
   border-radius: 12px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.95);
@@ -737,9 +738,16 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: rgba(242, 140, 40, 0.75);
   box-shadow: 0 0 0 3px rgba(242, 140, 40, 0.2);
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 88px;
 }
 
 .password-field-wrap {
@@ -1466,6 +1474,11 @@ button:disabled {
   align-items: stretch;
 }
 
+.billing-layout {
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr);
+  align-items: start;
+}
+
 .supplier-history-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1485,6 +1498,58 @@ button:disabled {
   display: grid;
   align-content: start;
   gap: 10px;
+}
+
+.billing-catalog-panel,
+.billing-checkout-panel {
+  min-height: 100%;
+}
+
+.billing-scan-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.billing-checkout-panel {
+  position: sticky;
+  top: 92px;
+}
+
+.billing-customer-fields,
+.billing-cart-list {
+  align-content: start;
+}
+
+.billing-cart-item {
+  display: grid;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.billing-cart-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.billing-summary-card {
+  display: grid;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.billing-summary-card .row {
+  margin: 0;
+}
+
+.billing-notes {
+  line-height: 1.4;
+}
+
+.billing-history-grid {
+  align-items: stretch;
 }
 
 .low-stock-carousel-head {
@@ -2815,6 +2880,16 @@ button:disabled {
   }
 
   .admin-products-top-row {
+    grid-template-columns: 1fr;
+  }
+
+  .billing-checkout-panel {
+    position: static;
+    top: auto;
+  }
+
+  .billing-scan-row,
+  .billing-cart-controls {
     grid-template-columns: 1fr;
   }
 

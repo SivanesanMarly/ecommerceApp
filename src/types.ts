@@ -28,6 +28,7 @@ export interface Product {
   unit: string;
   unit_value: number;
   image_url: string;
+  barcode?: string | null;
   currency?: string | null;
   slug?: string | null;
   tax_percent?: number | null;
@@ -186,4 +187,42 @@ export interface ProductDetailRecord {
   status: 'active' | 'inactive';
   supplier_user_id: string;
   slug: string;
+}
+
+export interface PosSaleItem {
+  id: string;
+  product_id: string;
+  product_name: string;
+  barcode?: string | null;
+  unit: string;
+  unit_value: number;
+  quantity: number;
+  unit_price: number;
+  discount_amount: number;
+  tax_percent: number;
+  tax_amount: number;
+  line_total: number;
+}
+
+export interface PosSaleSummary {
+  sale_id: string;
+  invoice_number: string;
+  customer_name: string;
+  customer_phone: string;
+  cashier_user_id: string;
+  cashier_name: string;
+  payment_mode: string;
+  item_count: number;
+  subtotal: number;
+  discount_amount: number;
+  tax_amount: number;
+  total_amount: number;
+  amount_paid: number;
+  change_amount: number;
+  notes: string;
+  created_at: string;
+}
+
+export interface PosSaleDetail extends PosSaleSummary {
+  items: PosSaleItem[];
 }

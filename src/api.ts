@@ -4,6 +4,8 @@ import type {
   NotificationPayload,
   OrderDetail,
   OrderHistoryItem,
+  PosSaleDetail,
+  PosSaleSummary,
   Product,
   Session,
   Shop,
@@ -245,6 +247,7 @@ export const api = {
       name: string;
       description: string;
       short_description?: string;
+      barcode?: string;
       category: string;
       subcategory?: string;
       brand?: string;
@@ -289,6 +292,7 @@ export const api = {
       name: string;
       description: string;
       short_description?: string;
+      barcode?: string;
       category: string;
       subcategory?: string;
       brand?: string;
@@ -533,6 +537,60 @@ export const api = {
     const { data } = await http.post<CatalogImportSummary>('/api/admin/catalog/import-excel', fd, {
       headers: authHeader(token),
       timeout: 120000,
+    });
+    return data;
+  },
+
+  async exportAdminCatalogExcel(token: string) {
+    const response = await http.get('/api/admin/catalog/export-excel', {
+      headers: authHeader(token),
+      responseType: 'blob',
+      timeout: 120000,
+    });
+    const contentDisposition = String(response.headers['content-disposition'] ?? '');
+    const filenameMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+    return {
+      blob: response.data as Blob,
+      filename: filenameMatch?.[1] || 'catalog_export.xlsx',
+    };
+  },
+
+  async lookupAdminPosProduct(token: string, barcode: string) {
+    const { data } = await http.get<Product>(
+      `/api/admin/pos/products/lookup?barcode=${encodeURIComponent(barcode)}`,
+      { headers: authHeader(token) },
+    );
+    return data;
+  },
+
+  async getAdminPosSales(token: string) {
+    const { data } = await http.get<PosSaleSummary[]>('/api/admin/pos/sales', {
+      headers: authHeader(token),
+    });
+    return data;
+  },
+
+  async getAdminPosSaleDetail(token: string, saleId: string) {
+    const { data } = await http.get<PosSaleDetail>(`/api/admin/pos/sales/${saleId}`, {
+      headers: authHeader(token),
+    });
+    return data;
+  },
+
+  async createAdminPosSale(
+    token: string,
+    payload: {
+      customer_name: string;
+      customer_phone: string;
+      payment_mode: string;
+      amount_paid: number;
+      sale_discount_amount: number;
+      notes: string;
+      items: Array<{ product_id: string; quantity: number; discount_amount: number }>;
+    },
+  ) {
+    const { data } = await http.post<PosSaleDetail>('/api/admin/pos/sales', payload, {
+      headers: authHeader(token),
     });
     return data;
   },
